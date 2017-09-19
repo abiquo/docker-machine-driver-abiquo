@@ -1,7 +1,7 @@
 package main
 
 import (
-	"docker-machine-driver-abiquo"
+	"github.com/abiquo/docker-machine-driver-abiquo"
 	"github.com/docker/machine/libmachine/drivers/plugin"
 )
 
