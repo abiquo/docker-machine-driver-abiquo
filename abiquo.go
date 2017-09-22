@@ -7,14 +7,16 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"io/ioutil"
 	"os"
 
 	"github.com/docker/machine/libmachine/drivers"
 	"github.com/docker/machine/libmachine/log"
 	"github.com/docker/machine/libmachine/mcnflag"
-	// "github.com/docker/machine/libmachine/ssh"
+	"github.com/docker/machine/libmachine/ssh"
 	"github.com/docker/machine/libmachine/state"
 
+	// "github.com/dghubble/oauth1"
 	"gopkg.in/resty.v0"
 )
 
@@ -34,11 +36,17 @@ func (e *configError) Error() string {
 
 type Driver struct {
 	*drivers.BaseDriver
-	Id                string
-	ApiURL            string
-	Insecure          bool
+	Id       string
+	ApiURL   string
+	Insecure bool
+
 	ApiUser           string
 	ApiPass           string
+	AppKey            string
+	AppSecret         string
+	AccessToken       string
+	AccessTokenSecret string
+
 	TemplateName      string
 	VirtualDatacenter string
 	VirtualAppliance  string
@@ -46,6 +54,8 @@ type Driver struct {
 	Ram               int
 	HardwareProfile   string
 	UserData          string
+	Debug             bool
+	DebugLogFile      string
 
 	// UsePrivateIP         bool
 	// UsePortForward       bool
@@ -95,6 +105,26 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			EnvVar: "ABIQUO_API_PASSWORD",
 		},
 		mcnflag.StringFlag{
+			Name:   "abiquo-app-key",
+			Usage:  "Abiquo API OAuth app key",
+			EnvVar: "ABIQUO_API_APP_KEY",
+		},
+		mcnflag.StringFlag{
+			Name:   "abiquo-app-secret",
+			Usage:  "Abiquo API OAuth app secret",
+			EnvVar: "ABIQUO_API_APP_SECRET",
+		},
+		mcnflag.StringFlag{
+			Name:   "abiquo-access-token",
+			Usage:  "Abiquo API OAuth access token",
+			EnvVar: "ABIQUO_API_ACCESS_TOKEN",
+		},
+		mcnflag.StringFlag{
+			Name:   "abiquo-access-token-secret",
+			Usage:  "Abiquo API OAuth access token",
+			EnvVar: "ABIQUO_API_ACCESS_TOKEN_SECRET",
+		},
+		mcnflag.StringFlag{
 			Name:  "abiquo-template-name",
 			Usage: "Template name",
 		},
@@ -133,6 +163,15 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Name:  "abiquo-user-data",
 			Usage: "User Data to inject to VM",
 		},
+		mcnflag.BoolFlag{
+			Name:  "abiquo-debug",
+			Usage: "Wether or not to output debug logging for the Abiquo API calls",
+		},
+		mcnflag.StringFlag{
+			Name:  "abiquo-debug-log-file",
+			Usage: "Log file where to output debug from HTTP client",
+			Value: "/tmp/docker-machine-driver-abiquo.log",
+		},
 
 		// mcnflag.IntFlag{
 		// 	Name:   "cloudstack-timeout",
@@ -163,17 +202,6 @@ func (d *Driver) GetSSHHostname() (string, error) {
 	return d.GetIP()
 }
 
-// func (d *Driver) GetSSHKeyPath() string {
-// 	if d.SSHKeyPath == "" {
-// 		template, err := d.getTemplate()
-// 		if err != nil {
-// 			return "root"
-// 		}
-// 		return template.LoginUser
-// 	}
-// 	return d.SSHUser
-// }
-
 func (d *Driver) GetSSHUsername() string {
 	if d.SSHUser == "" {
 		template, err := d.getTemplate()
@@ -185,6 +213,10 @@ func (d *Driver) GetSSHUsername() string {
 	return d.SSHUser
 }
 
+func (d *Driver) publicSSHKeyPath() string {
+	return d.GetSSHKeyPath() + ".pub"
+}
+
 // SetConfigFromFlags configures the driver with the object that was returned
 // by RegisterCreateFlags
 func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
@@ -192,6 +224,11 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	d.Insecure = flags.Bool("abiquo-api-insecure")
 	d.ApiUser = flags.String("abiquo-api-username")
 	d.ApiPass = flags.String("abiquo-api-password")
+	d.AppKey = flags.String("abiquo-app-key")
+	d.AppSecret = flags.String("abiquo-app-secret")
+	d.AccessToken = flags.String("abiquo-access-token")
+	d.AccessTokenSecret = flags.String("abiquo-access-token-secret")
+
 	d.VirtualDatacenter = flags.String("abiquo-vdc")
 	d.VirtualAppliance = flags.String("abiquo-vapp")
 	d.TemplateName = flags.String("abiquo-template-name")
@@ -201,9 +238,10 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	d.SSHKeyPath = flags.String("abiquo-ssh-key")
 	d.SSHUser = flags.String("abiquo-ssh-user")
 	d.UserData = flags.String("abiquo-user-data")
+	d.Debug = flags.Bool("abiquo-debug")
+	d.DebugLogFile = flags.String("abiquo-debug-log-file")
 
-	d.SwarmMaster = flags.Bool("swarm-master")
-	d.SwarmDiscovery = flags.String("swarm-discovery")
+	d.SetSwarmConfigFromFlags(flags)
 
 	if d.ApiURL == "" {
 		return &configError{option: "api-url"}
@@ -270,7 +308,7 @@ func (d *Driver) PreCreateCheck() error {
 		return err
 	}
 
-	_, err = vdc.GetTemplate(d.TemplateName, d.getClient())
+	_, err = d.getTemplate()
 	if err != nil {
 		return err
 	}
@@ -347,6 +385,7 @@ func (d *Driver) Create() error {
 
 	vms_lnk, _ := vapp.GetLink("virtualmachines")
 	body, _ := json.Marshal(dockerVM)
+	log.Debug("VM JSON is:", fmt.Sprintf("%s", body))
 	vm_raw, err := abq.SetHeader("Accept", "application/vnd.abiquo.virtualmachine+json").
 		SetHeader("Content-Type", "application/vnd.abiquo.virtualmachine+json").
 		SetBody(body).
@@ -358,10 +397,23 @@ func (d *Driver) Create() error {
 
 	vm_url, _ := dockerVM.GetLink("edit")
 	d.Id = vm_url.Href
-	log.Debug("Created VM:", vm_url.Href)
+	log.Info(fmt.Sprintf("Created VM: %s (%s)", dockerVM.Name, vm_url))
 
 	// Set user data
-	mdata := "#!/bin/bash\necho \"docker-machine-driver-abiquo :: making sure SSH key gets injected.\""
+	log.Debug(fmt.Sprintf("Key Path is: %s", d.SSHKeyPath))
+	if d.SSHKeyPath == "" {
+		log.Info("Creating SSH key...")
+		if err := ssh.GenerateSSHKey(d.GetSSHKeyPath()); err != nil {
+			return err
+		}
+	}
+	ssh_key_bytes, err := ioutil.ReadFile(d.publicSSHKeyPath())
+	if err != nil {
+		return err
+	}
+	mdata := fmt.Sprintf("#cloud-config\nusers:\n  - default:\n    ssh-authorized-keys:\n      - %s", ssh_key_bytes)
+	log.Debug(fmt.Sprintf("Generated cloud-init script is: %s", mdata))
+
 	if d.UserData != "" {
 		mdata = d.UserData
 	}
@@ -385,26 +437,41 @@ func (d *Driver) Create() error {
 	log.Debug("Metadata updated:", fmt.Sprintf("%s", mdata_raw.Body()))
 
 	// Deploy
-	log.Debug(fmt.Sprintf("Deploying VM %s", dockerVM.Name))
+	log.Info(fmt.Sprintf("Deploying VM %s", dockerVM.Name))
 	err = dockerVM.Deploy(abq)
 	if err != nil {
 		return err
 	}
+	log.Info(fmt.Sprintf("Deployed VM %s successfully", dockerVM.Name))
 
 	return nil
 }
 
 // Remove a host
 func (d *Driver) Remove() error {
+	abq := d.getClient()
 	vm, err := d.getVmByUrl(d.Id)
 	if err != nil {
 		return err
 	}
 
-	abq := d.getClient()
 	err = vm.Delete(abq)
 	if err != nil {
 		return err
+	}
+
+	vapp, err := vm.GetVapp(abq)
+	if err != nil {
+		return err
+	}
+
+	vms, err := vapp.GetVMs(abq)
+	if err != nil {
+		return err
+	}
+	if len(vms) == 0 {
+		log.Info("Deleting vApp since it's empty.")
+		vapp.Delete(abq)
 	}
 
 	return nil
@@ -540,6 +607,7 @@ func (d *Driver) getVdcTemplates(vdc VDC) ([]VirtualMachineTemplate, error) {
 			break
 		}
 	}
+
 	return alltemplates, nil
 }
 
@@ -668,14 +736,25 @@ func (d *Driver) getVmByUrl(vmurl string) (VirtualMachine, error) {
 }
 
 func (d *Driver) getClient() *resty.Request {
-	// Enable debug mode
-	resty.SetDebug(true)
-
-	// Using you custom log writer
-	logFile, _ := os.OpenFile("./go-resty.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-	resty.SetLogger(logFile)
-
 	resty.SetTLSClientConfig(&tls.Config{InsecureSkipVerify: d.Insecure})
+	if d.Debug {
+		// Enable debug mode
+		resty.SetDebug(true)
+
+		// Using you custom log writer
+		logFile, _ := os.OpenFile(d.DebugLogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+		resty.SetLogger(logFile)
+	}
+
 	rclient := resty.R().SetBasicAuth(d.ApiUser, d.ApiPass)
 	return rclient
+
+	// tr := &http.Transport{
+	// 	TLSClientConfig: &tls.Config{InsecureSkipVerify: d.Insecure},
+	// 	Proxy: func(req *http.Request) {
+	// 		req.SetBasicAuth(d.ApiUser, d.ApiPass)
+	// 	},
+	// }
+	// client := &http.Client{Transport: tr}
+
 }

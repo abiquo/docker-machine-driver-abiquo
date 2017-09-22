@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	// "net/http"
 	"strings"
 	"time"
 
@@ -125,6 +126,46 @@ type VirtualApp struct {
 	Name              string `json:"name,omitempty"`
 	PublicApp         int    `json:"publicApp,omitempty"`
 	State             string `json:"state,omitempty"`
+}
+
+func (v *VirtualApp) Delete(c *resty.Request) error {
+	edit_lnk, _ := v.GetLink("edit")
+	_, err := c.Delete(edit_lnk.Href)
+	if err != nil {
+		return err
+	}
+
+	return nil
+
+}
+
+func (v *VirtualApp) GetVMs(c *resty.Request) ([]VirtualMachine, error) {
+	var vms []VirtualMachine
+	var vmsCol VirtualMachineCollection
+	vms_raw, err := v.FollowLink("virtualmachines", c)
+	if err != nil {
+		return vms, err
+	}
+	json.Unmarshal(vms_raw.Body(), &vmsCol)
+
+	for {
+		for _, vm := range vmsCol.Collection {
+			vms = append(vms, vm)
+		}
+
+		if vmsCol.HasNext() {
+			next_link := vmsCol.GetNext()
+			vms_raw, err = c.SetHeader("Accept", "application/vnd.abiquo.virtualmachines+json").
+				Get(next_link.Href)
+			if err != nil {
+				return vms, err
+			}
+			json.Unmarshal(vms_raw.Body(), &vmsCol)
+		} else {
+			break
+		}
+	}
+	return vms, nil
 }
 
 type VdcCollection struct {
@@ -315,6 +356,16 @@ type VirtualMachine struct {
 	CreationTimestamp int64                  `json:"creationTimestamp,omitempty"`
 	Backuppolicies    []interface{}          `json:"backuppolicies,omitempty"`
 	LastSynchronize   int64                  `json:"lastSynchronize,omitempty"`
+}
+
+func (v *VirtualMachine) GetVapp(c *resty.Request) (VirtualApp, error) {
+	var vapp VirtualApp
+	vapp_raw, err := v.FollowLink("virtualappliance", c)
+	if err != nil {
+		return vapp, err
+	}
+	json.Unmarshal(vapp_raw.Body(), &vapp)
+	return vapp, nil
 }
 
 func (v *VirtualMachine) Deploy(c *resty.Request) error {
@@ -522,3 +573,28 @@ type Task struct {
 	State     string `json:"state,omitempty"`
 	Timestamp int    `json:"timestamp,omitempty"`
 }
+
+// type RequestOptions struct {
+// 	Headers map[string]string
+// }
+
+// type Client struct {
+// 	ApiUrl            string
+// 	Insecure          bool
+// 	ApiUser           string
+// 	ApiPass           string
+// 	AppKey            string
+// 	AppSecret         string
+// 	AccessToken       string
+// 	AccessTokenSecret string
+
+// 	httpClient http.Client
+// }
+
+// func (c *Client) Get(url string, opts RequestOptions) (*http.Response, error) {
+// 	req := http.NewRequest("GET", url)
+
+// 	for k, v := range opts.Headers {
+// 		req.Header.Add(k, v)
+// 	}
+// }
