@@ -1,50 +1,66 @@
 package abiquo
 
 import (
+	// "context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
-	// "net/http"
+	"log"
+	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 
-	"gopkg.in/resty.v0"
+	// "github.com/dghubble/oauth1"
+	// "github.com/chirauki/oauth1"
+	"github.com/ernesto-jimenez/httplogger"
+	"github.com/go-resty/resty"
+	// "github.com/kurrik/oauth1a"
+	"github.com/nhjk/oauth"
 )
 
 type DTO struct {
 	Links []Link `json:"links,omitempty"`
 }
 
-func (d *DTO) FollowLink(rel string, c *resty.Request) (*resty.Response, error) {
-	for _, l := range d.Links {
-		if l.Rel == rel {
-			resp, error := c.SetHeader("Accept", l.Type).
-				Get(l.Href)
-			return resp, error
-		}
+func (d *DTO) FollowLink(rel string, c *AbiquoClient) (*resty.Response, error) {
+	link, err := d.GetLink(rel)
+	if err != nil {
+		return &resty.Response{}, err
 	}
-	errorMsg := fmt.Sprintf("Link with rel '%s' not found", rel)
-	var r resty.Response
-	return &r, errors.New(errorMsg)
+
+	resp, err := c.client.NewRequest().
+		SetHeader("Accept", link.Type).
+		Get(link.Href)
+	return resp, err
 }
 
 func (d *DTO) GetLink(rel string) (Link, error) {
-	var link Link
+	link := Link{Href: ""}
+
 	for _, l := range d.Links {
 		if l.Rel == rel {
-			return l, nil
+			link = l
 		}
 	}
-	errorMsg := fmt.Sprintf("Link with rel '%s' not found", rel)
-	return link, errors.New(errorMsg)
+
+	if link.Href == "" {
+		errorMsg := fmt.Sprintf("Link with rel '%s' not found", rel)
+		return link, errors.New(errorMsg)
+	} else {
+		link.trimPort()
+		return link, nil
+	}
 }
 
-func (d *DTO) Refresh(c *resty.Request) (*resty.Response, error) {
+func (d *DTO) Refresh(c *AbiquoClient) (*resty.Response, error) {
 	edit_lnk, err := d.GetLink("edit")
 	if err != nil {
 		edit_lnk, _ = d.GetLink("self")
 	}
-	return c.SetHeader("Accept", edit_lnk.Type).
+	return c.client.R().SetHeader("Accept", edit_lnk.Type).
 		SetHeader("Content-Type", edit_lnk.Type).
 		Get(edit_lnk.Href)
 }
@@ -56,8 +72,8 @@ type Link struct {
 	Rel   string `json:"rel,omitempty"`
 }
 
-func (l *Link) Get(c *resty.Request) (*resty.Response, error) {
-	resp, err := c.SetHeader("Accept", l.Type).Get(l.Href)
+func (l *Link) Get(c *AbiquoClient) (*resty.Response, error) {
+	resp, err := c.client.R().SetHeader("Accept", l.Type).Get(l.Href)
 	return resp, err
 }
 
@@ -67,13 +83,37 @@ type AbstractCollection struct {
 }
 
 func (c *AbstractCollection) GetNext() Link {
-	var l Link
-	for _, link := range c.Links {
-		if link.Rel == "next" {
-			l = link
+	link := Link{Href: ""}
+
+	for _, l := range c.Links {
+		if l.Rel == "next" {
+			link = l
 		}
 	}
-	return l
+
+	if link.Href == "" {
+		return Link{}
+	} else {
+		link.trimPort()
+		return link
+	}
+}
+
+func (l *Link) trimPort() {
+	r, _ := url.Parse(l.Href)
+
+	var trimport bool
+	if r.Scheme == "https" && r.Port() == "443" {
+		trimport = true
+	} else if r.Scheme == "http" && r.Port() == "80" {
+		trimport = true
+	} else {
+		trimport = false
+	}
+	if trimport {
+		l.Href = fmt.Sprintf("%s://%s%s?%s", r.Scheme, r.Hostname(), r.Path, r.RawQuery)
+		l.Href = strings.Trim(l.Href, "?")
+	}
 }
 
 func (c *AbstractCollection) HasNext() bool {
@@ -128,9 +168,9 @@ type VirtualApp struct {
 	State             string `json:"state,omitempty"`
 }
 
-func (v *VirtualApp) Delete(c *resty.Request) error {
+func (v *VirtualApp) Delete(c *AbiquoClient) error {
 	edit_lnk, _ := v.GetLink("edit")
-	_, err := c.Delete(edit_lnk.Href)
+	_, err := c.client.R().Delete(edit_lnk.Href)
 	if err != nil {
 		return err
 	}
@@ -139,7 +179,7 @@ func (v *VirtualApp) Delete(c *resty.Request) error {
 
 }
 
-func (v *VirtualApp) GetVMs(c *resty.Request) ([]VirtualMachine, error) {
+func (v *VirtualApp) GetVMs(c *AbiquoClient) ([]VirtualMachine, error) {
 	var vms []VirtualMachine
 	var vmsCol VirtualMachineCollection
 	vms_raw, err := v.FollowLink("virtualmachines", c)
@@ -155,7 +195,7 @@ func (v *VirtualApp) GetVMs(c *resty.Request) ([]VirtualMachine, error) {
 
 		if vmsCol.HasNext() {
 			next_link := vmsCol.GetNext()
-			vms_raw, err = c.SetHeader("Accept", "application/vnd.abiquo.virtualmachines+json").
+			vms_raw, err = c.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualmachines+json").
 				Get(next_link.Href)
 			if err != nil {
 				return vms, err
@@ -200,7 +240,7 @@ type HWprofile struct {
 	Active bool   `json:"active,omitempty"`
 }
 
-func (v *VDC) GetVirtualApps(c *resty.Request) ([]VirtualApp, error) {
+func (v *VDC) GetVirtualApps(c *AbiquoClient) ([]VirtualApp, error) {
 	var allVapps []VirtualApp
 	var vapps VirtualAppCollection
 	vapps_raw, err := v.FollowLink("virtualappliances", c)
@@ -214,7 +254,7 @@ func (v *VDC) GetVirtualApps(c *resty.Request) ([]VirtualApp, error) {
 		}
 		if vapps.HasNext() {
 			next_link := vapps.GetNext()
-			vapps_raw, err := c.SetHeader("Accept", "application/vnd.abiquo.virtualappliances+json").
+			vapps_raw, err := c.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualappliances+json").
 				Get(next_link.Href)
 			if err != nil {
 				return allVapps, err
@@ -227,32 +267,13 @@ func (v *VDC) GetVirtualApps(c *resty.Request) ([]VirtualApp, error) {
 	return allVapps, nil
 }
 
-func (v *VDC) GetTemplate(template_name string, c *resty.Request) (VirtualMachineTemplate, error) {
+func (v *VDC) GetTemplate(template_name string, c *AbiquoClient) (VirtualMachineTemplate, error) {
 	var vt VirtualMachineTemplate
-	var templates TemplateCollection
-	var alltemplates []VirtualMachineTemplate
-
-	templates_raw, err := v.FollowLink("templates", c)
+	templates, err := v.GetTemplates(c)
 	if err != nil {
 		return vt, err
 	}
-
-	json.Unmarshal(templates_raw.Body(), &templates)
-	for templates.HasNext() {
-		for _, t := range templates.Collection {
-			alltemplates = append(alltemplates, t)
-		}
-
-		next_link := templates.GetNext()
-		templates_raw, err = c.SetHeader("Accept", "application/vnd.abiquo.virtualmachinetemplates+json").
-			Get(next_link.Href)
-		if err != nil {
-			return vt, err
-		}
-		json.Unmarshal(templates_raw.Body(), &templates)
-	}
-
-	for _, t := range alltemplates {
+	for _, t := range templates {
 		if t.Name == template_name {
 			return t, nil
 		}
@@ -261,7 +282,38 @@ func (v *VDC) GetTemplate(template_name string, c *resty.Request) (VirtualMachin
 	return vt, errors.New(errorMsg)
 }
 
-func (v *VDC) HardwareProfiles(c *resty.Request) ([]HWprofile, error) {
+func (v *VDC) GetTemplates(c *AbiquoClient) ([]VirtualMachineTemplate, error) {
+	var templates TemplateCollection
+	var alltemplates []VirtualMachineTemplate
+
+	templates_raw, err := v.FollowLink("templates", c)
+	if err != nil {
+		return alltemplates, err
+	}
+
+	json.Unmarshal(templates_raw.Body(), &templates)
+	for {
+		for _, t := range templates.Collection {
+			alltemplates = append(alltemplates, t)
+		}
+
+		if templates.HasNext() {
+			next_link := templates.GetNext()
+			templates_raw, err = c.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualmachinetemplates+json").
+				Get(next_link.Href)
+			if err != nil {
+				return alltemplates, err
+			}
+			json.Unmarshal(templates_raw.Body(), &templates)
+		} else {
+			break
+		}
+	}
+
+	return alltemplates, nil
+}
+
+func (v *VDC) HardwareProfiles(c *AbiquoClient) ([]HWprofile, error) {
 	var profiles []HWprofile
 	var dto DTO
 	var hwp HWprofile
@@ -307,7 +359,7 @@ type Limit struct {
 	CPUHard                 int  `json:"cpuHard,omitempty"`
 }
 
-func (l *Limit) GetHardwareProfiles(c *resty.Request) ([]HWprofile, error) {
+func (l *Limit) GetHardwareProfiles(c *AbiquoClient) ([]HWprofile, error) {
 	var allProfiles []HWprofile
 	if !l.EnabledHardwareProfiles {
 		return allProfiles, nil
@@ -316,7 +368,7 @@ func (l *Limit) GetHardwareProfiles(c *resty.Request) ([]HWprofile, error) {
 	for _, link := range l.Links {
 		if link.Rel == "hardwareprofile" {
 			var hp HWprofile
-			hp_raw, err := c.SetHeader("Accept", link.Type).
+			hp_raw, err := c.client.R().SetHeader("Accept", link.Type).
 				Get(link.Href)
 			if err != nil {
 				return allProfiles, err
@@ -358,7 +410,7 @@ type VirtualMachine struct {
 	LastSynchronize   int64                  `json:"lastSynchronize,omitempty"`
 }
 
-func (v *VirtualMachine) GetVapp(c *resty.Request) (VirtualApp, error) {
+func (v *VirtualMachine) GetVapp(c *AbiquoClient) (VirtualApp, error) {
 	var vapp VirtualApp
 	vapp_raw, err := v.FollowLink("virtualappliance", c)
 	if err != nil {
@@ -368,9 +420,9 @@ func (v *VirtualMachine) GetVapp(c *resty.Request) (VirtualApp, error) {
 	return vapp, nil
 }
 
-func (v *VirtualMachine) Deploy(c *resty.Request) error {
+func (v *VirtualMachine) Deploy(c *AbiquoClient) error {
 	deploy_lnk, err := v.GetLink("deploy")
-	accept_request_raw, err := c.SetHeader("Accept", "application/vnd.abiquo.acceptedrequest+json").
+	accept_request_raw, err := c.client.R().SetHeader("Accept", "application/vnd.abiquo.acceptedrequest+json").
 		Post(deploy_lnk.Href)
 	if err != nil {
 		return err
@@ -392,7 +444,7 @@ func (v *VirtualMachine) Deploy(c *resty.Request) error {
 	}
 
 	task_lnk, _ := accept_request.GetLink("status")
-	task_raw, err := c.SetHeader("Accept", "application/vnd.abiquo.taskextended+json").
+	task_raw, err := c.client.R().SetHeader("Accept", "application/vnd.abiquo.taskextended+json").
 		Get(task_lnk.Href)
 	if err != nil {
 		return err
@@ -406,18 +458,18 @@ func (v *VirtualMachine) Deploy(c *resty.Request) error {
 	return nil
 }
 
-func (v *VirtualMachine) PowerOn(c *resty.Request) error {
+func (v *VirtualMachine) PowerOn(c *AbiquoClient) error {
 	return v.applyState("ON", c)
 }
 
-func (v *VirtualMachine) PowerOff(c *resty.Request) error {
+func (v *VirtualMachine) PowerOff(c *AbiquoClient) error {
 	return v.applyState("OFF", c)
 }
 
-func (v *VirtualMachine) applyState(state string, c *resty.Request) error {
+func (v *VirtualMachine) applyState(state string, c *AbiquoClient) error {
 	body := fmt.Sprintf("{\"state\": \"%s\"}", state)
 	state_lnk, _ := v.GetLink("state")
-	accept_request_raw, err := c.SetHeader("Accept", "application/vnd.abiquo.acceptedrequest+json").
+	accept_request_raw, err := c.client.R().SetHeader("Accept", "application/vnd.abiquo.acceptedrequest+json").
 		SetHeader("Content-Type", "application/vnd.abiquo.virtualmachinestate+json").
 		SetBody(body).
 		Put(state_lnk.Href)
@@ -441,7 +493,7 @@ func (v *VirtualMachine) applyState(state string, c *resty.Request) error {
 	}
 
 	task_lnk, _ := accept_request.GetLink("status")
-	task_raw, err := c.SetHeader("Accept", "application/vnd.abiquo.taskextended+json").
+	task_raw, err := c.client.R().SetHeader("Accept", "application/vnd.abiquo.taskextended+json").
 		Get(task_lnk.Href)
 	if err != nil {
 		return err
@@ -455,10 +507,10 @@ func (v *VirtualMachine) applyState(state string, c *resty.Request) error {
 	return nil
 }
 
-func (v *VirtualMachine) Reset(c *resty.Request) error {
+func (v *VirtualMachine) Reset(c *AbiquoClient) error {
 	body := ""
 	reset_lnk, _ := v.GetLink("reset")
-	accept_request_raw, err := c.SetHeader("Accept", "application/vnd.abiquo.acceptedrequest+json").
+	accept_request_raw, err := c.client.R().SetHeader("Accept", "application/vnd.abiquo.acceptedrequest+json").
 		SetHeader("Content-Type", "application/vnd.abiquo.virtualmachinestate+json").
 		SetBody(body).
 		Post(reset_lnk.Href)
@@ -482,7 +534,7 @@ func (v *VirtualMachine) Reset(c *resty.Request) error {
 	}
 
 	task_lnk, _ := accept_request.GetLink("status")
-	task_raw, err := c.SetHeader("Accept", "application/vnd.abiquo.taskextended+json").
+	task_raw, err := c.client.R().SetHeader("Accept", "application/vnd.abiquo.taskextended+json").
 		Get(task_lnk.Href)
 	if err != nil {
 		return err
@@ -496,9 +548,9 @@ func (v *VirtualMachine) Reset(c *resty.Request) error {
 	return nil
 }
 
-func (v *VirtualMachine) Delete(c *resty.Request) error {
+func (v *VirtualMachine) Delete(c *AbiquoClient) error {
 	edit_lnk, _ := v.GetLink("edit")
-	_, err := c.Delete(edit_lnk.Href)
+	_, err := c.client.R().Delete(edit_lnk.Href)
 	if err != nil {
 		return err
 	}
@@ -574,27 +626,143 @@ type Task struct {
 	Timestamp int    `json:"timestamp,omitempty"`
 }
 
-// type RequestOptions struct {
-// 	Headers map[string]string
-// }
+type AbiquoClient struct {
+	client *resty.Client
+}
 
-// type Client struct {
-// 	ApiUrl            string
-// 	Insecure          bool
-// 	ApiUser           string
-// 	ApiPass           string
-// 	AppKey            string
-// 	AppSecret         string
-// 	AccessToken       string
-// 	AccessTokenSecret string
+func GetClient(apiurl string, user string, pass string, insecure bool) *AbiquoClient {
+	rc := resty.New()
 
-// 	httpClient http.Client
-// }
+	baseTransport := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure},
+	}
 
-// func (c *Client) Get(url string, opts RequestOptions) (*http.Response, error) {
-// 	req := http.NewRequest("GET", url)
+	logger := &httpLogger{
+		log: log.New(os.Stderr, "log - ", log.LstdFlags),
+	}
 
-// 	for k, v := range opts.Headers {
-// 		req.Header.Add(k, v)
-// 	}
-// }
+	var baseClient *http.Client
+	if os.Getenv("ABIQUO_DEBUG") != "" {
+		baseClient = &http.Client{
+			Transport: httplogger.NewLoggedTransport(baseTransport, logger),
+		}
+	} else {
+		baseClient = &http.Client{
+			Transport: baseTransport,
+		}
+	}
+
+	rc.SetHostURL(apiurl)
+	rc.SetBasicAuth(user, pass)
+	rc.SetTransport(baseClient.Transport)
+
+	return &AbiquoClient{client: rc}
+}
+
+func GetOAuthClient(apiurl string, api_key string, api_secret string, token string, token_secret string, insecure bool) *AbiquoClient {
+	rc := resty.New()
+
+	rc.SetPreRequestHook(func(c *resty.Client, r *resty.Request) error {
+		req := r.RawRequest
+
+		consumer := &oauth.Consumer{api_key, api_secret}
+		consumer.Authorize(req, &oauth.Token{token, token_secret})
+
+		return nil
+	})
+
+	baseTransport := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure},
+	}
+
+	logger := &httpLogger{
+		log: log.New(os.Stderr, "log - ", log.LstdFlags),
+	}
+
+	var baseClient *http.Client
+	if os.Getenv("ABIQUO_DEBUG") != "" {
+		baseClient = &http.Client{
+			Transport: httplogger.NewLoggedTransport(baseTransport, logger),
+		}
+	} else {
+		baseClient = &http.Client{
+			Transport: baseTransport,
+		}
+	}
+
+	// ctx := context.WithValue(oauth1.NoContext, oauth1.HTTPClient, baseClient)
+	// cli := oauth1.NewClient(ctx, oauth1.NewConfig(api_key, api_secret), oauth1.NewToken(token, token_secret))
+
+	rc.SetHostURL(apiurl)
+	rc.SetTransport(baseClient.Transport)
+	// rc.SetTransport(cli.Transport)
+
+	return &AbiquoClient{client: rc}
+}
+
+type httpLogger struct {
+	log *log.Logger
+}
+
+func (l *httpLogger) LogRequest(req *http.Request) {
+	l.log.Printf(
+		"Request %s %s",
+		req.Method,
+		req.URL.String(),
+	)
+	for name, value := range req.Header {
+		l.log.Printf("Header '%v': '%v'\n", name, value)
+	}
+}
+
+func (l *httpLogger) LogResponse(req *http.Request, res *http.Response, err error, duration time.Duration) {
+	duration /= time.Millisecond
+	if err != nil {
+		l.log.Println(err)
+	} else {
+		l.log.Printf(
+			"Response method=%s status=%d durationMs=%d %s",
+			req.Method,
+			res.StatusCode,
+			duration,
+			req.URL.String(),
+		)
+		for name, value := range res.Header {
+			l.log.Printf("Header '%v': '%v'\n", name, value)
+		}
+	}
+}
+
+func (c *AbiquoClient) GetVDCs() ([]VDC, error) {
+	var vdcscol VdcCollection
+	var allVdcs []VDC
+
+	vdcs_resp, err := c.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualdatacenters+json").
+		Get(fmt.Sprintf("%s/cloud/virtualdatacenters", c.client.HostURL))
+	if err != nil {
+		return allVdcs, err
+	}
+
+	err = json.Unmarshal(vdcs_resp.Body(), &vdcscol)
+	if err != nil {
+		return allVdcs, err
+	}
+	for {
+		for _, v := range vdcscol.Collection {
+			allVdcs = append(allVdcs, v)
+		}
+
+		if vdcscol.HasNext() {
+			next_link := vdcscol.GetNext()
+			vdcs_resp, err = c.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualdatacenters+json").
+				Get(next_link.Href)
+			if err != nil {
+				return allVdcs, err
+			}
+			json.Unmarshal(vdcs_resp.Body(), &vdcscol)
+		} else {
+			break
+		}
+	}
+	return allVdcs, nil
+}

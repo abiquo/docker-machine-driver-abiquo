@@ -1,23 +1,18 @@
 package abiquo
 
 import (
-	// "encoding/base64"
-	"fmt"
-	// "io/ioutil"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/ioutil"
-	"os"
+	"strconv"
+	"strings"
 
 	"github.com/docker/machine/libmachine/drivers"
 	"github.com/docker/machine/libmachine/log"
 	"github.com/docker/machine/libmachine/mcnflag"
 	"github.com/docker/machine/libmachine/ssh"
 	"github.com/docker/machine/libmachine/state"
-
-	// "github.com/dghubble/oauth1"
-	"gopkg.in/resty.v0"
 )
 
 const (
@@ -56,28 +51,6 @@ type Driver struct {
 	UserData          string
 	Debug             bool
 	DebugLogFile      string
-
-	// UsePrivateIP         bool
-	// UsePortForward       bool
-	// PublicIP             string
-	// PublicIPID           string
-	// DisassociatePublicIP bool
-	// SSHKeyPair           string
-	// PrivateIP            string
-	// CIDRList             []string
-	// FirewallRuleIds      []string
-	// Expunge              bool
-	// Template             string
-	// TemplateID           string
-	// ServiceOffering      string
-	// ServiceOfferingID    string
-	// Network              string
-	// NetworkID            string
-	// Zone                 string
-	// ZoneID               string
-	// NetworkType          string
-	// UserDataFile         string
-	// UserData             string
 }
 
 // GetCreateFlags registers the flags this driver adds to
@@ -172,13 +145,6 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Usage: "Log file where to output debug from HTTP client",
 			Value: "/tmp/docker-machine-driver-abiquo.log",
 		},
-
-		// mcnflag.IntFlag{
-		// 	Name:   "cloudstack-timeout",
-		// 	Usage:  "time(seconds) allowed to complete async job",
-		// 	EnvVar: "CLOUDSTACK_TIMEOUT",
-		// 	Value:  300,
-		// },
 	}
 }
 
@@ -247,17 +213,22 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 		return &configError{option: "api-url"}
 	}
 
-	if d.ApiUser == "" {
+	if d.ApiUser == "" && d.AppKey == "" {
 		return &configError{option: "api-username"}
 	}
 
-	if d.ApiPass == "" {
+	if d.ApiUser != "" && d.ApiPass == "" {
 		return &configError{option: "api-password"}
 	}
 
 	if d.TemplateName == "" {
 		return &configError{option: "template-name"}
 	}
+
+	log.Debugf("App Key: '%s'", d.AppKey)
+	log.Debugf("App Secret: '%s'", d.AppSecret)
+	log.Debugf("Access Token: '%s'", d.AccessToken)
+	log.Debugf("Access Token secret: '%s'", d.AccessTokenSecret)
 
 	return nil
 }
@@ -308,6 +279,16 @@ func (d *Driver) PreCreateCheck() error {
 		return err
 	}
 
+	var template_names []string
+	templates, err := d.getVdcTemplates(vdc)
+	if err != nil {
+		return err
+	}
+	for _, t := range templates {
+		template_names = append(template_names, t.Name)
+	}
+	log.Debug("Templates:", strings.Join(template_names, " "))
+
 	_, err = d.getTemplate()
 	if err != nil {
 		return err
@@ -356,24 +337,14 @@ func (d *Driver) Create() error {
 
 	// If we need HP, look it up
 	if d.HardwareProfile != "" {
-		var lim Limit
-		lim_raw, err := vdc.FollowLink("limit", abq)
+		hprof, err := d.getHWProfile(vdc)
 		if err != nil {
 			return err
 		}
-		json.Unmarshal(lim_raw.Body(), &lim)
-		hprofiles, err := lim.GetHardwareProfiles(abq)
-		if err != nil {
-			return err
-		}
-		for _, hprof := range hprofiles {
-			if hprof.Name == d.HardwareProfile {
-				hp_lnk, _ := hprof.GetLink("edit")
-				hp_lnk.Rel = "hardwareprofile"
-				dockerVM.Links = append(dockerVM.Links, hp_lnk)
-				log.Debug("Got HW profile:", hp_lnk.Href)
-			}
-		}
+		hp_lnk, _ := hprof.GetLink("edit")
+		hp_lnk.Rel = "hardwareprofile"
+		dockerVM.Links = append(dockerVM.Links, hp_lnk)
+		log.Debug("Got HW profile:", hp_lnk.Href)
 	} else {
 		dockerVM.CPU = d.Cpus
 		dockerVM.RAM = d.Ram
@@ -382,18 +353,10 @@ func (d *Driver) Create() error {
 
 	// Create the machine
 	log.Info("Creating virtual machine...")
-
-	vms_lnk, _ := vapp.GetLink("virtualmachines")
-	body, _ := json.Marshal(dockerVM)
-	log.Debug("VM JSON is:", fmt.Sprintf("%s", body))
-	vm_raw, err := abq.SetHeader("Accept", "application/vnd.abiquo.virtualmachine+json").
-		SetHeader("Content-Type", "application/vnd.abiquo.virtualmachine+json").
-		SetBody(body).
-		Post(vms_lnk.Href)
+	dockerVM, err = d.createVM(vapp, dockerVM)
 	if err != nil {
 		return err
 	}
-	json.Unmarshal(vm_raw.Body(), &dockerVM)
 
 	vm_url, _ := dockerVM.GetLink("edit")
 	d.Id = vm_url.Href
@@ -411,30 +374,8 @@ func (d *Driver) Create() error {
 	if err != nil {
 		return err
 	}
-	mdata := fmt.Sprintf("#cloud-config\nusers:\n  - default:\n    ssh-authorized-keys:\n      - %s", ssh_key_bytes)
-	log.Debug(fmt.Sprintf("Generated cloud-init script is: %s", mdata))
-
-	if d.UserData != "" {
-		mdata = d.UserData
-	}
-	links := []int{}
-	md := make(map[string]interface{})
-	md2 := make(map[string]interface{})
-	md2["startup-script"] = mdata
-	md["links"] = links
-	md["metadata"] = md2
-
-	metadata_lnk, _ := dockerVM.GetLink("metadata")
-	body, _ = json.Marshal(md)
-	log.Debug("Metadata will be:", fmt.Sprintf("%s", body))
-	mdata_raw, err := abq.SetHeader("Accept", "application/vnd.abiquo.metadata+json").
-		SetHeader("Content-Type", "application/vnd.abiquo.metadata+json").
-		SetBody(body).
-		Put(metadata_lnk.Href)
-	if err != nil {
-		return err
-	}
-	log.Debug("Metadata updated:", fmt.Sprintf("%s", mdata_raw.Body()))
+	d.setUserData(dockerVM, ssh_key_bytes)
+	log.Debug("Metadata updated")
 
 	// Deploy
 	log.Info(fmt.Sprintf("Deploying VM %s", dockerVM.Name))
@@ -561,22 +502,16 @@ func (d *Driver) checkCpuRam() error {
 
 func (d *Driver) getTemplate() (VirtualMachineTemplate, error) {
 	var template VirtualMachineTemplate
+	abq := d.getClient()
 	vdc, err := d.getVdc()
 	if err != nil {
 		return template, err
 	}
-	templates, err := d.getVdcTemplates(vdc)
+	template, err = vdc.GetTemplate(d.TemplateName, abq)
 	if err != nil {
 		return template, err
 	}
-
-	for _, t := range templates {
-		if t.Name == d.TemplateName {
-			return t, nil
-		}
-	}
-	errorMsg := fmt.Sprintf("Template '%s' not found in VDC '%s'", d.TemplateName, d.VirtualDatacenter)
-	return template, errors.New(errorMsg)
+	return template, nil
 }
 
 func (d *Driver) getVdcTemplates(vdc VDC) ([]VirtualMachineTemplate, error) {
@@ -597,7 +532,7 @@ func (d *Driver) getVdcTemplates(vdc VDC) ([]VirtualMachineTemplate, error) {
 
 		if templates.HasNext() {
 			next_link := templates.GetNext()
-			templates_raw, err = abq.SetHeader("Accept", "application/vnd.abiquo.virtualmachinetemplates+json").
+			templates_raw, err = abq.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualmachinetemplates+json").
 				Get(next_link.Href)
 			if err != nil {
 				return alltemplates, err
@@ -629,38 +564,11 @@ func (d *Driver) getVdc() (VDC, error) {
 }
 
 func (d *Driver) getVdcs() ([]VDC, error) {
-	var vdcscol VdcCollection
 	var allVdcs []VDC
 
 	abq := d.getClient()
-	vdcs_resp, err := abq.SetHeader("Accept", "application/vnd.abiquo.virtualdatacenters+json").
-		Get(fmt.Sprintf("%s/cloud/virtualdatacenters", d.ApiURL))
-	if err != nil {
-		return allVdcs, err
-	}
-
-	err = json.Unmarshal(vdcs_resp.Body(), &vdcscol)
-	if err != nil {
-		return allVdcs, err
-	}
-	for {
-		for _, v := range vdcscol.Collection {
-			allVdcs = append(allVdcs, v)
-		}
-
-		if vdcscol.HasNext() {
-			next_link := vdcscol.GetNext()
-			vdcs_resp, err = abq.SetHeader("Accept", "application/vnd.abiquo.virtualdatacenters+json").
-				Get(next_link.Href)
-			if err != nil {
-				return allVdcs, err
-			}
-			json.Unmarshal(vdcs_resp.Body(), &vdcscol)
-		} else {
-			break
-		}
-	}
-	return allVdcs, nil
+	allVdcs, err := abq.GetVDCs()
+	return allVdcs, err
 }
 
 func (d *Driver) createOrGetVapp() (VirtualApp, error) {
@@ -697,19 +605,14 @@ func (d *Driver) createVapp() (VirtualApp, error) {
 		return vapp, err
 	}
 
-	var vapps_lnk Link
-	for _, l := range vdc.Links {
-		if l.Rel == "virtualappliances" {
-			vapps_lnk = l
-		}
-	}
+	vapps_lnk, _ := vdc.GetLink("virtualappliances")
 
 	vapp.Name = d.VirtualAppliance
 	jsonbytes, err := json.Marshal(vapp)
 	if err != nil {
 		return vapp, err
 	}
-	vapp_raw, err := abq.SetHeader("Accept", "application/vnd.abiquo.virtualappliance+json").
+	vapp_raw, err := abq.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualappliance+json").
 		SetHeader("Content-Type", "application/vnd.abiquo.virtualappliance+json").
 		SetBody(jsonbytes).
 		Post(vapps_lnk.Href)
@@ -722,8 +625,16 @@ func (d *Driver) createVapp() (VirtualApp, error) {
 
 func (d *Driver) getVmByUrl(vmurl string) (VirtualMachine, error) {
 	var vm VirtualMachine
+
+	fragments := strings.Split(vmurl, "/")
+	vm_id := fragments[len(fragments)-1]
+	_, err := strconv.ParseInt(vm_id, 10, 64)
+	if err != nil {
+		return vm, err
+	}
+
 	abq := d.getClient()
-	vm_raw, err := abq.SetHeader("Accept", "application/vnd.abiquo.virtualmachine+json").
+	vm_raw, err := abq.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualmachine+json").
 		Get(vmurl)
 	if err != nil {
 		return vm, err
@@ -735,26 +646,77 @@ func (d *Driver) getVmByUrl(vmurl string) (VirtualMachine, error) {
 	return vm, nil
 }
 
-func (d *Driver) getClient() *resty.Request {
-	resty.SetTLSClientConfig(&tls.Config{InsecureSkipVerify: d.Insecure})
-	if d.Debug {
-		// Enable debug mode
-		resty.SetDebug(true)
-
-		// Using you custom log writer
-		logFile, _ := os.OpenFile(d.DebugLogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-		resty.SetLogger(logFile)
+func (d *Driver) getHWProfile(vdc VDC) (HWprofile, error) {
+	var hwprofile HWprofile
+	var lim Limit
+	abq := d.getClient()
+	lim_raw, err := vdc.FollowLink("limit", abq)
+	if err != nil {
+		return hwprofile, err
 	}
+	json.Unmarshal(lim_raw.Body(), &lim)
+	hprofiles, err := lim.GetHardwareProfiles(abq)
+	if err != nil {
+		return hwprofile, err
+	}
+	for _, hprof := range hprofiles {
+		if hprof.Name == d.HardwareProfile {
+			hwprofile = hprof
+		}
+	}
+	return hwprofile, nil
+}
 
-	rclient := resty.R().SetBasicAuth(d.ApiUser, d.ApiPass)
-	return rclient
+func (d *Driver) createVM(vapp VirtualApp, vm VirtualMachine) (VirtualMachine, error) {
+	var vm_created VirtualMachine
+	abq := d.getClient()
+	vms_lnk, _ := vapp.GetLink("virtualmachines")
+	body, _ := json.Marshal(vm)
 
-	// tr := &http.Transport{
-	// 	TLSClientConfig: &tls.Config{InsecureSkipVerify: d.Insecure},
-	// 	Proxy: func(req *http.Request) {
-	// 		req.SetBasicAuth(d.ApiUser, d.ApiPass)
-	// 	},
-	// }
-	// client := &http.Client{Transport: tr}
+	vm_raw, err := abq.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualmachine+json").
+		SetHeader("Content-Type", "application/vnd.abiquo.virtualmachine+json").
+		SetBody(body).
+		Post(vms_lnk.Href)
+	if err != nil {
+		return vm_created, err
+	}
+	json.Unmarshal(vm_raw.Body(), &vm_created)
+	return vm_created, nil
+}
 
+func (d *Driver) setUserData(vm VirtualMachine, ssh_key_bytes []byte) error {
+	abq := d.getClient()
+	mdata := fmt.Sprintf("#cloud-config\nusers:\n  - default:\n    ssh-authorized-keys:\n      - %s", ssh_key_bytes)
+	log.Debug(fmt.Sprintf("Generated cloud-init script is: %s", mdata))
+
+	if d.UserData != "" {
+		mdata = d.UserData
+	}
+	links := []int{}
+	md := make(map[string]interface{})
+	md2 := make(map[string]interface{})
+	md2["startup-script"] = mdata
+	md["links"] = links
+	md["metadata"] = md2
+
+	metadata_lnk, _ := vm.GetLink("metadata")
+	body, _ := json.Marshal(md)
+	log.Debug("Metadata will be:", fmt.Sprintf("%s", body))
+	_, err := abq.client.R().SetHeader("Accept", "application/vnd.abiquo.metadata+json").
+		SetHeader("Content-Type", "application/vnd.abiquo.metadata+json").
+		SetBody(body).
+		Put(metadata_lnk.Href)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (d *Driver) getClient() *AbiquoClient {
+	if d.AppKey != "" {
+		return GetOAuthClient(d.ApiURL, d.AppKey, d.AppSecret, d.AccessToken, d.AccessTokenSecret, d.Insecure)
+	} else if d.ApiUser != "" {
+		return GetClient(d.ApiURL, d.ApiUser, d.ApiPass, d.Insecure)
+	}
+	return nil
 }
