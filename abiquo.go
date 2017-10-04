@@ -360,7 +360,7 @@ func (d *Driver) Create() error {
 
 	vm_url, _ := dockerVM.GetLink("edit")
 	d.Id = vm_url.Href
-	log.Info(fmt.Sprintf("Created VM: %s (%s)", dockerVM.Name, vm_url))
+	log.Info(fmt.Sprintf("Created VM: %s (%s)", dockerVM.Name, d.Id))
 
 	// Set user data
 	log.Debug(fmt.Sprintf("Key Path is: %s", d.SSHKeyPath))
@@ -626,24 +626,29 @@ func (d *Driver) createVapp() (VirtualApp, error) {
 func (d *Driver) getVmByUrl(vmurl string) (VirtualMachine, error) {
 	var vm VirtualMachine
 
-	fragments := strings.Split(vmurl, "/")
-	vm_id := fragments[len(fragments)-1]
-	_, err := strconv.ParseInt(vm_id, 10, 64)
-	if err != nil {
-		return vm, err
-	}
+	if vmurl != "" {
+		fragments := strings.Split(vmurl, "/")
+		vm_id := fragments[len(fragments)-1]
+		_, err := strconv.ParseInt(vm_id, 10, 64)
+		if err != nil {
+			return vm, err
+		}
 
-	abq := d.getClient()
-	vm_raw, err := abq.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualmachine+json").
-		Get(vmurl)
-	if err != nil {
-		return vm, err
+		abq := d.getClient()
+		vm_raw, err := abq.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualmachine+json").
+			Get(vmurl)
+		if err != nil {
+			return vm, err
+		}
+		if vm_raw.StatusCode() == 404 {
+			return vm, errors.New("NOT FOUND")
+		}
+		json.Unmarshal(vm_raw.Body(), &vm)
+		return vm, nil
+	} else {
+		errorMsg := fmt.Sprintf("VM url '%s' cannot be found in Abiquo.", vmurl)
+		return vm, errors.New(errorMsg)
 	}
-	if vm_raw.StatusCode() == 404 {
-		return vm, errors.New("NOT FOUND")
-	}
-	json.Unmarshal(vm_raw.Body(), &vm)
-	return vm, nil
 }
 
 func (d *Driver) getHWProfile(vdc VDC) (HWprofile, error) {
@@ -671,6 +676,16 @@ func (d *Driver) createVM(vapp VirtualApp, vm VirtualMachine) (VirtualMachine, e
 	var vm_created VirtualMachine
 	abq := d.getClient()
 	vms_lnk, _ := vapp.GetLink("virtualmachines")
+
+	p, err := abq.GetConfigProperty("client.virtual.allowVMRemoteAccess")
+	if err != nil {
+		log.Debug("Could not check if remote access is enabled. Will keep it disabled.")
+	}
+	log.Debug(fmt.Sprintf("Got config properties '%s' with value '%s'", p.Name, p.Value))
+	if p.Value == "1" {
+		log.Debug("Enabling remote access.")
+		vm.VdrpEnabled = true
+	}
 	body, _ := json.Marshal(vm)
 
 	vm_raw, err := abq.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualmachine+json").

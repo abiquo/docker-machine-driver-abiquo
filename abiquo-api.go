@@ -766,3 +766,65 @@ func (c *AbiquoClient) GetVDCs() ([]VDC, error) {
 	}
 	return allVdcs, nil
 }
+
+type ConfigProperty struct {
+	DTO
+	ID          int    `json:"id,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Value       string `json:"value,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+type ConfigPropertyCollection struct {
+	AbstractCollection
+	Collection []ConfigProperty
+}
+
+func (c *AbiquoClient) GetConfigProperty(name string) (ConfigProperty, error) {
+	var prop ConfigProperty
+	props, err := c.GetConfigProperties()
+	if err != nil {
+		return prop, err
+	}
+	for _, p := range props {
+		if p.Name == name {
+			return p, nil
+		}
+	}
+	errorMsg := fmt.Sprintf("Property '%s' was not found.", name)
+	return prop, errors.New(errorMsg)
+}
+
+func (c *AbiquoClient) GetConfigProperties() ([]ConfigProperty, error) {
+	var propsCol ConfigPropertyCollection
+	var allprops []ConfigProperty
+
+	props_resp, err := c.client.R().SetHeader("Accept", "application/vnd.abiquo.systemproperties+json").
+		Get(fmt.Sprintf("%s/config/properties", c.client.HostURL))
+	if err != nil {
+		return allprops, err
+	}
+
+	err = json.Unmarshal(props_resp.Body(), &propsCol)
+	if err != nil {
+		return allprops, err
+	}
+	for {
+		for _, p := range propsCol.Collection {
+			allprops = append(allprops, p)
+		}
+
+		if propsCol.HasNext() {
+			next_link := propsCol.GetNext()
+			props_resp, err = c.client.R().SetHeader("Accept", "application/vnd.abiquo.systemproperties+json").
+				Get(next_link.Href)
+			if err != nil {
+				return allprops, err
+			}
+			json.Unmarshal(props_resp.Body(), &propsCol)
+		} else {
+			break
+		}
+	}
+	return allprops, nil
+}
