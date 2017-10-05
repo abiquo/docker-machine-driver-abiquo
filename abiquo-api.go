@@ -240,6 +240,11 @@ type HWprofile struct {
 	Active bool   `json:"active,omitempty"`
 }
 
+type HWprofileCollection struct {
+	AbstractCollection
+	Collection []HWprofile
+}
+
 func (v *VDC) GetVirtualApps(c *AbiquoClient) ([]VirtualApp, error) {
 	var allVapps []VirtualApp
 	var vapps VirtualAppCollection
@@ -367,6 +372,7 @@ func (l *Limit) GetHardwareProfiles(c *AbiquoClient) ([]HWprofile, error) {
 
 	for _, link := range l.Links {
 		if link.Rel == "hardwareprofile" {
+			link.trimPort()
 			var hp HWprofile
 			hp_raw, err := c.client.R().SetHeader("Accept", link.Type).
 				Get(link.Href)
@@ -827,4 +833,53 @@ func (c *AbiquoClient) GetConfigProperties() ([]ConfigProperty, error) {
 		}
 	}
 	return allprops, nil
+}
+
+type Location struct {
+	DTO
+	ID   int    `json:"id,omitempty"`
+	Name string `json:"name,omitempty"`
+}
+
+type LocationCollection struct {
+	AbstractCollection
+	Collection []Location
+}
+
+func (v *VDC) GetHardwareProfiles(c *AbiquoClient) ([]HWprofile, error) {
+	var allProfiles []HWprofile
+	var hprofiles HWprofileCollection
+	var location Location
+
+	location_raw, err := v.FollowLink("location", c)
+	if err != nil {
+		return allProfiles, err
+	}
+	json.Unmarshal(location_raw.Body(), &location)
+
+	profiles_raw, err := location.FollowLink("hardwareprofiles", c)
+	if err != nil {
+		return allProfiles, err
+	}
+
+	json.Unmarshal(profiles_raw.Body(), &hprofiles)
+	for {
+		for _, hp := range hprofiles.Collection {
+			allProfiles = append(allProfiles, hp)
+		}
+
+		if hprofiles.HasNext() {
+			next_link := hprofiles.GetNext()
+			profiles_raw, err = c.client.R().SetHeader("Accept", "application/vnd.abiquo.hardwareprofiles+json").
+				Get(next_link.Href)
+			if err != nil {
+				return allProfiles, err
+			}
+			json.Unmarshal(profiles_raw.Body(), &hprofiles)
+		} else {
+			break
+		}
+	}
+
+	return allProfiles, nil
 }

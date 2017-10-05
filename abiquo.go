@@ -341,7 +341,7 @@ func (d *Driver) Create() error {
 		if err != nil {
 			return err
 		}
-		hp_lnk, _ := hprof.GetLink("edit")
+		hp_lnk, _ := hprof.GetLink("self")
 		hp_lnk.Rel = "hardwareprofile"
 		dockerVM.Links = append(dockerVM.Links, hp_lnk)
 		log.Debug("Got HW profile:", hp_lnk.Href)
@@ -485,7 +485,7 @@ func (d *Driver) checkCpuRam() error {
 
 	if lim.EnabledHardwareProfiles {
 		// Ned a HW profile
-		hwprofiles, err := lim.GetHardwareProfiles(abq)
+		hwprofiles, err := vdc.GetHardwareProfiles(abq)
 		if err != nil {
 			return err
 		}
@@ -660,11 +660,12 @@ func (d *Driver) getHWProfile(vdc VDC) (HWprofile, error) {
 		return hwprofile, err
 	}
 	json.Unmarshal(lim_raw.Body(), &lim)
-	hprofiles, err := lim.GetHardwareProfiles(abq)
+	hprofiles, err := vdc.GetHardwareProfiles(abq)
 	if err != nil {
 		return hwprofile, err
 	}
 	for _, hprof := range hprofiles {
+		log.Debug(fmt.Sprintf("Found HW profile with name '%s'", hprof.Name))
 		if hprof.Name == d.HardwareProfile {
 			hwprofile = hprof
 		}
@@ -688,6 +689,7 @@ func (d *Driver) createVM(vapp VirtualApp, vm VirtualMachine) (VirtualMachine, e
 	}
 	body, _ := json.Marshal(vm)
 
+	log.Debugf("VM JSON : %s", body)
 	vm_raw, err := abq.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualmachine+json").
 		SetHeader("Content-Type", "application/vnd.abiquo.virtualmachine+json").
 		SetBody(body).
