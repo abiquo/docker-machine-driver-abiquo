@@ -13,6 +13,8 @@ import (
 	"github.com/docker/machine/libmachine/mcnflag"
 	"github.com/docker/machine/libmachine/ssh"
 	"github.com/docker/machine/libmachine/state"
+
+	"github.com/abiquo/docker-machine-driver-abiquo/abiquo"
 )
 
 const (
@@ -303,7 +305,7 @@ func (d *Driver) PreCreateCheck() error {
 
 // Create a host using the driver's config
 func (d *Driver) Create() error {
-	var dockerVM VirtualMachine
+	var dockerVM abiquo_api.VirtualMachine
 	dockerVM.Label = d.MachineName
 
 	abq := d.getClient()
@@ -479,7 +481,7 @@ func (d *Driver) checkCpuRam() error {
 		return err
 	}
 
-	var lim Limit
+	var lim abiquo_api.Limit
 	lim_raw, _ := vdc.FollowLink("limit", abq)
 	json.Unmarshal(lim_raw.Body(), &lim)
 
@@ -500,8 +502,8 @@ func (d *Driver) checkCpuRam() error {
 	return nil
 }
 
-func (d *Driver) getTemplate() (VirtualMachineTemplate, error) {
-	var template VirtualMachineTemplate
+func (d *Driver) getTemplate() (abiquo_api.VirtualMachineTemplate, error) {
+	var template abiquo_api.VirtualMachineTemplate
 	abq := d.getClient()
 	vdc, err := d.getVdc()
 	if err != nil {
@@ -514,40 +516,20 @@ func (d *Driver) getTemplate() (VirtualMachineTemplate, error) {
 	return template, nil
 }
 
-func (d *Driver) getVdcTemplates(vdc VDC) ([]VirtualMachineTemplate, error) {
-	var templates TemplateCollection
-	var alltemplates []VirtualMachineTemplate
+func (d *Driver) getVdcTemplates(vdc abiquo_api.VDC) ([]abiquo_api.VirtualMachineTemplate, error) {
+	var alltemplates []abiquo_api.VirtualMachineTemplate
 
 	abq := d.getClient()
-	templates_raw, err := vdc.FollowLink("templates", abq)
+	alltemplates, err := vdc.GetTemplates(abq)
 	if err != nil {
 		return alltemplates, err
-	}
-
-	json.Unmarshal(templates_raw.Body(), &templates)
-	for {
-		for _, t := range templates.Collection {
-			alltemplates = append(alltemplates, t)
-		}
-
-		if templates.HasNext() {
-			next_link := templates.GetNext()
-			templates_raw, err = abq.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualmachinetemplates+json").
-				Get(next_link.Href)
-			if err != nil {
-				return alltemplates, err
-			}
-			json.Unmarshal(templates_raw.Body(), &templates)
-		} else {
-			break
-		}
 	}
 
 	return alltemplates, nil
 }
 
-func (d *Driver) getVdc() (VDC, error) {
-	var novdc VDC
+func (d *Driver) getVdc() (abiquo_api.VDC, error) {
+	var novdc abiquo_api.VDC
 	vdcs, err := d.getVdcs()
 	if err != nil {
 		return novdc, err
@@ -563,16 +545,16 @@ func (d *Driver) getVdc() (VDC, error) {
 	return novdc, errors.New(errorMsg)
 }
 
-func (d *Driver) getVdcs() ([]VDC, error) {
-	var allVdcs []VDC
+func (d *Driver) getVdcs() ([]abiquo_api.VDC, error) {
+	var allVdcs []abiquo_api.VDC
 
 	abq := d.getClient()
 	allVdcs, err := abq.GetVDCs()
 	return allVdcs, err
 }
 
-func (d *Driver) createOrGetVapp() (VirtualApp, error) {
-	var vapp VirtualApp
+func (d *Driver) createOrGetVapp() (abiquo_api.VirtualApp, error) {
+	var vapp abiquo_api.VirtualApp
 	abq := d.getClient()
 	vdc, err := d.getVdc()
 	if err != nil {
@@ -597,34 +579,23 @@ func (d *Driver) createOrGetVapp() (VirtualApp, error) {
 	return vapp, nil
 }
 
-func (d *Driver) createVapp() (VirtualApp, error) {
-	var vapp VirtualApp
+func (d *Driver) createVapp() (abiquo_api.VirtualApp, error) {
+	var vapp abiquo_api.VirtualApp
 	abq := d.getClient()
 	vdc, err := d.getVdc()
 	if err != nil {
 		return vapp, err
 	}
 
-	vapps_lnk, _ := vdc.GetLink("virtualappliances")
-
-	vapp.Name = d.VirtualAppliance
-	jsonbytes, err := json.Marshal(vapp)
+	vapp, err = vdc.CreateVapp(d.VirtualAppliance, abq)
 	if err != nil {
 		return vapp, err
 	}
-	vapp_raw, err := abq.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualappliance+json").
-		SetHeader("Content-Type", "application/vnd.abiquo.virtualappliance+json").
-		SetBody(jsonbytes).
-		Post(vapps_lnk.Href)
-	if err != nil {
-		return vapp, err
-	}
-	json.Unmarshal(vapp_raw.Body(), &vapp)
 	return vapp, nil
 }
 
-func (d *Driver) getVmByUrl(vmurl string) (VirtualMachine, error) {
-	var vm VirtualMachine
+func (d *Driver) getVmByUrl(vmurl string) (abiquo_api.VirtualMachine, error) {
+	var vm abiquo_api.VirtualMachine
 
 	if vmurl != "" {
 		fragments := strings.Split(vmurl, "/")
@@ -635,25 +606,20 @@ func (d *Driver) getVmByUrl(vmurl string) (VirtualMachine, error) {
 		}
 
 		abq := d.getClient()
-		vm_raw, err := abq.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualmachine+json").
-			Get(vmurl)
+		vm, err = abq.GetVMByUrl(vmurl)
 		if err != nil {
 			return vm, err
 		}
-		if vm_raw.StatusCode() == 404 {
-			return vm, errors.New("NOT FOUND")
-		}
-		json.Unmarshal(vm_raw.Body(), &vm)
 		return vm, nil
 	} else {
-		errorMsg := fmt.Sprintf("VM url '%s' cannot be found in Abiquo.", vmurl)
+		errorMsg := "VM url is empty."
 		return vm, errors.New(errorMsg)
 	}
 }
 
-func (d *Driver) getHWProfile(vdc VDC) (HWprofile, error) {
-	var hwprofile HWprofile
-	var lim Limit
+func (d *Driver) getHWProfile(vdc abiquo_api.VDC) (abiquo_api.HWprofile, error) {
+	var hwprofile abiquo_api.HWprofile
+	var lim abiquo_api.Limit
 	abq := d.getClient()
 	lim_raw, err := vdc.FollowLink("limit", abq)
 	if err != nil {
@@ -673,10 +639,9 @@ func (d *Driver) getHWProfile(vdc VDC) (HWprofile, error) {
 	return hwprofile, nil
 }
 
-func (d *Driver) createVM(vapp VirtualApp, vm VirtualMachine) (VirtualMachine, error) {
-	var vm_created VirtualMachine
+func (d *Driver) createVM(vapp abiquo_api.VirtualApp, vm abiquo_api.VirtualMachine) (abiquo_api.VirtualMachine, error) {
+	var vm_created abiquo_api.VirtualMachine
 	abq := d.getClient()
-	vms_lnk, _ := vapp.GetLink("virtualmachines")
 
 	p, err := abq.GetConfigProperty("client.virtual.allowVMRemoteAccess")
 	if err != nil {
@@ -690,18 +655,14 @@ func (d *Driver) createVM(vapp VirtualApp, vm VirtualMachine) (VirtualMachine, e
 	body, _ := json.Marshal(vm)
 
 	log.Debugf("VM JSON : %s", body)
-	vm_raw, err := abq.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualmachine+json").
-		SetHeader("Content-Type", "application/vnd.abiquo.virtualmachine+json").
-		SetBody(body).
-		Post(vms_lnk.Href)
+	vm_created, err = vapp.CreateVM(vm, abq)
 	if err != nil {
 		return vm_created, err
 	}
-	json.Unmarshal(vm_raw.Body(), &vm_created)
 	return vm_created, nil
 }
 
-func (d *Driver) setUserData(vm VirtualMachine, ssh_key_bytes []byte) error {
+func (d *Driver) setUserData(vm abiquo_api.VirtualMachine, ssh_key_bytes []byte) error {
 	abq := d.getClient()
 	mdata := fmt.Sprintf("#cloud-config\nusers:\n  - default:\n    ssh-authorized-keys:\n      - %s", ssh_key_bytes)
 	log.Debug(fmt.Sprintf("Generated cloud-init script is: %s", mdata))
@@ -716,24 +677,20 @@ func (d *Driver) setUserData(vm VirtualMachine, ssh_key_bytes []byte) error {
 	md["links"] = links
 	md["metadata"] = md2
 
-	metadata_lnk, _ := vm.GetLink("metadata")
 	body, _ := json.Marshal(md)
 	log.Debug("Metadata will be:", fmt.Sprintf("%s", body))
-	_, err := abq.client.R().SetHeader("Accept", "application/vnd.abiquo.metadata+json").
-		SetHeader("Content-Type", "application/vnd.abiquo.metadata+json").
-		SetBody(body).
-		Put(metadata_lnk.Href)
+	err := vm.SetMetadata(fmt.Sprintf("%s", body), abq)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (d *Driver) getClient() *AbiquoClient {
+func (d *Driver) getClient() *abiquo_api.AbiquoClient {
 	if d.AppKey != "" {
-		return GetOAuthClient(d.ApiURL, d.AppKey, d.AppSecret, d.AccessToken, d.AccessTokenSecret, d.Insecure)
+		return abiquo_api.GetOAuthClient(d.ApiURL, d.AppKey, d.AppSecret, d.AccessToken, d.AccessTokenSecret, d.Insecure)
 	} else if d.ApiUser != "" {
-		return GetClient(d.ApiURL, d.ApiUser, d.ApiPass, d.Insecure)
+		return abiquo_api.GetClient(d.ApiURL, d.ApiUser, d.ApiPass, d.Insecure)
 	}
 	return nil
 }
