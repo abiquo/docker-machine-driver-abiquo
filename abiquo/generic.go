@@ -18,9 +18,9 @@ func (d *DTO) FollowLink(rel string, c *AbiquoClient) (*resty.Response, error) {
 		return &resty.Response{}, err
 	}
 
-	resp, err := c.client.NewRequest().
+	resp, err := c.checkResponse(c.client.NewRequest().
 		SetHeader("Accept", link.Type).
-		Get(link.Href)
+		Get(link.Href))
 	return resp, err
 }
 
@@ -47,9 +47,9 @@ func (d *DTO) Refresh(c *AbiquoClient) (*resty.Response, error) {
 	if err != nil {
 		edit_lnk, _ = d.GetLink("self")
 	}
-	return c.client.R().SetHeader("Accept", edit_lnk.Type).
+	return c.checkResponse(c.client.R().SetHeader("Accept", edit_lnk.Type).
 		SetHeader("Content-Type", edit_lnk.Type).
-		Get(edit_lnk.Href)
+		Get(edit_lnk.Href))
 }
 
 // Generic Collection

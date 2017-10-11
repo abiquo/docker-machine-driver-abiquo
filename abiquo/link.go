@@ -16,7 +16,7 @@ type Link struct {
 }
 
 func (l *Link) Get(c *AbiquoClient) (*resty.Response, error) {
-	resp, err := c.client.R().SetHeader("Accept", l.Type).Get(l.Href)
+	resp, err := c.checkResponse(c.client.R().SetHeader("Accept", l.Type).Get(l.Href))
 	return resp, err
 }
 

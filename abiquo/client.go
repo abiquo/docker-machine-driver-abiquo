@@ -87,6 +87,26 @@ func GetOAuthClient(apiurl string, api_key string, api_secret string, token stri
 	return &AbiquoClient{client: rc}
 }
 
+func (c *AbiquoClient) checkResponse(resp *resty.Response, err error) (*resty.Response, error) {
+	if err != nil {
+		return resp, err
+	}
+
+	if resp.StatusCode() > 399 {
+		var errCol ErrorCollection
+		err = json.Unmarshal(resp.Body(), &errCol)
+		if err != nil {
+			// Not errorDTO
+			abqerror := fmt.Errorf("ERROR %d: %s", resp.StatusCode(), resp.Body())
+			return resp, abqerror
+		}
+
+		abqerror := errCol.Collection[0]
+		err = fmt.Errorf("ERROR %s - %s (HTTP %d)", abqerror.Code, abqerror.Message, resp.StatusCode())
+	}
+	return resp, err
+}
+
 type httpLogger struct {
 	log *log.Logger
 }

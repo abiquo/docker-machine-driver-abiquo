@@ -38,8 +38,8 @@ func (l *Limit) GetHardwareProfiles(c *AbiquoClient) ([]HWprofile, error) {
 		if link.Rel == "hardwareprofile" {
 			link.trimPort()
 			var hp HWprofile
-			hp_raw, err := c.client.R().SetHeader("Accept", link.Type).
-				Get(link.Href)
+			hp_raw, err := c.checkResponse(c.client.R().SetHeader("Accept", link.Type).
+				Get(link.Href))
 			if err != nil {
 				return allProfiles, err
 			}

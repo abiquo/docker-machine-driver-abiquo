@@ -20,7 +20,7 @@ type VirtualApp struct {
 
 func (v *VirtualApp) Delete(c *AbiquoClient) error {
 	edit_lnk, _ := v.GetLink("edit")
-	_, err := c.client.R().Delete(edit_lnk.Href)
+	_, err := c.checkResponse(c.client.R().Delete(edit_lnk.Href))
 	if err != nil {
 		return err
 	}
@@ -45,8 +45,8 @@ func (v *VirtualApp) GetVMs(c *AbiquoClient) ([]VirtualMachine, error) {
 
 		if vmsCol.HasNext() {
 			next_link := vmsCol.GetNext()
-			vms_raw, err = c.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualmachines+json").
-				Get(next_link.Href)
+			vms_raw, err = c.checkResponse(c.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualmachines+json").
+				Get(next_link.Href))
 			if err != nil {
 				return vms, err
 			}
@@ -63,10 +63,10 @@ func (v *VirtualApp) CreateVM(vm VirtualMachine, c *AbiquoClient) (VirtualMachin
 	body, _ := json.Marshal(vm)
 	vms_lnk, _ := v.GetLink("virtualmachines")
 
-	vm_raw, err := c.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualmachine+json").
+	vm_raw, err := c.checkResponse(c.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualmachine+json").
 		SetHeader("Content-Type", "application/vnd.abiquo.virtualmachine+json").
 		SetBody(body).
-		Post(vms_lnk.Href)
+		Post(vms_lnk.Href))
 	if err != nil {
 		return vm_created, err
 	}

@@ -50,8 +50,8 @@ func (v *VirtualMachine) GetVapp(c *AbiquoClient) (VirtualApp, error) {
 
 func (v *VirtualMachine) Deploy(c *AbiquoClient) error {
 	deploy_lnk, err := v.GetLink("deploy")
-	accept_request_raw, err := c.client.R().SetHeader("Accept", "application/vnd.abiquo.acceptedrequest+json").
-		Post(deploy_lnk.Href)
+	accept_request_raw, err := c.checkResponse(c.client.R().SetHeader("Accept", "application/vnd.abiquo.acceptedrequest+json").
+		Post(deploy_lnk.Href))
 	if err != nil {
 		return err
 	}
@@ -72,8 +72,8 @@ func (v *VirtualMachine) Deploy(c *AbiquoClient) error {
 	}
 
 	task_lnk, _ := accept_request.GetLink("status")
-	task_raw, err := c.client.R().SetHeader("Accept", "application/vnd.abiquo.taskextended+json").
-		Get(task_lnk.Href)
+	task_raw, err := c.checkResponse(c.client.R().SetHeader("Accept", "application/vnd.abiquo.taskextended+json").
+		Get(task_lnk.Href))
 	if err != nil {
 		return err
 	}
@@ -97,10 +97,10 @@ func (v *VirtualMachine) PowerOff(c *AbiquoClient) error {
 func (v *VirtualMachine) applyState(state string, c *AbiquoClient) error {
 	body := fmt.Sprintf("{\"state\": \"%s\"}", state)
 	state_lnk, _ := v.GetLink("state")
-	accept_request_raw, err := c.client.R().SetHeader("Accept", "application/vnd.abiquo.acceptedrequest+json").
+	accept_request_raw, err := c.checkResponse(c.client.R().SetHeader("Accept", "application/vnd.abiquo.acceptedrequest+json").
 		SetHeader("Content-Type", "application/vnd.abiquo.virtualmachinestate+json").
 		SetBody(body).
-		Put(state_lnk.Href)
+		Put(state_lnk.Href))
 	if err != nil {
 		return err
 	}
@@ -121,8 +121,8 @@ func (v *VirtualMachine) applyState(state string, c *AbiquoClient) error {
 	}
 
 	task_lnk, _ := accept_request.GetLink("status")
-	task_raw, err := c.client.R().SetHeader("Accept", "application/vnd.abiquo.taskextended+json").
-		Get(task_lnk.Href)
+	task_raw, err := c.checkResponse(c.client.R().SetHeader("Accept", "application/vnd.abiquo.taskextended+json").
+		Get(task_lnk.Href))
 	if err != nil {
 		return err
 	}
@@ -138,10 +138,10 @@ func (v *VirtualMachine) applyState(state string, c *AbiquoClient) error {
 func (v *VirtualMachine) Reset(c *AbiquoClient) error {
 	body := ""
 	reset_lnk, _ := v.GetLink("reset")
-	accept_request_raw, err := c.client.R().SetHeader("Accept", "application/vnd.abiquo.acceptedrequest+json").
+	accept_request_raw, err := c.checkResponse(c.client.R().SetHeader("Accept", "application/vnd.abiquo.acceptedrequest+json").
 		SetHeader("Content-Type", "application/vnd.abiquo.virtualmachinestate+json").
 		SetBody(body).
-		Post(reset_lnk.Href)
+		Post(reset_lnk.Href))
 	if err != nil {
 		return err
 	}
@@ -162,8 +162,8 @@ func (v *VirtualMachine) Reset(c *AbiquoClient) error {
 	}
 
 	task_lnk, _ := accept_request.GetLink("status")
-	task_raw, err := c.client.R().SetHeader("Accept", "application/vnd.abiquo.taskextended+json").
-		Get(task_lnk.Href)
+	task_raw, err := c.checkResponse(c.client.R().SetHeader("Accept", "application/vnd.abiquo.taskextended+json").
+		Get(task_lnk.Href))
 	if err != nil {
 		return err
 	}
@@ -178,7 +178,7 @@ func (v *VirtualMachine) Reset(c *AbiquoClient) error {
 
 func (v *VirtualMachine) Delete(c *AbiquoClient) error {
 	edit_lnk, _ := v.GetLink("edit")
-	_, err := c.client.R().Delete(edit_lnk.Href)
+	_, err := c.checkResponse(c.client.R().Delete(edit_lnk.Href))
 	if err != nil {
 		return err
 	}
@@ -230,10 +230,10 @@ func (v *VirtualMachine) SetMetadata(mdata string, c *AbiquoClient) error {
 	metadata_lnk, _ := v.GetLink("metadata")
 	body, _ := json.Marshal(mdata)
 
-	_, err := c.client.R().SetHeader("Accept", "application/vnd.abiquo.metadata+json").
+	_, err := c.checkResponse(c.client.R().SetHeader("Accept", "application/vnd.abiquo.metadata+json").
 		SetHeader("Content-Type", "application/vnd.abiquo.metadata+json").
 		SetBody(body).
-		Put(metadata_lnk.Href)
+		Put(metadata_lnk.Href))
 	if err != nil {
 		return err
 	}

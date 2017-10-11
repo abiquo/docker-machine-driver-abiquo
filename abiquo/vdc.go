@@ -44,8 +44,8 @@ func (v *VDC) GetVirtualApps(c *AbiquoClient) ([]VirtualApp, error) {
 		}
 		if vapps.HasNext() {
 			next_link := vapps.GetNext()
-			vapps_raw, err := c.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualappliances+json").
-				Get(next_link.Href)
+			vapps_raw, err := c.checkResponse(c.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualappliances+json").
+				Get(next_link.Href))
 			if err != nil {
 				return allVapps, err
 			}
@@ -89,8 +89,8 @@ func (v *VDC) GetTemplates(c *AbiquoClient) ([]VirtualMachineTemplate, error) {
 
 		if templates.HasNext() {
 			next_link := templates.GetNext()
-			templates_raw, err = c.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualmachinetemplates+json").
-				Get(next_link.Href)
+			templates_raw, err = c.checkResponse(c.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualmachinetemplates+json").
+				Get(next_link.Href))
 			if err != nil {
 				return alltemplates, err
 			}
@@ -127,8 +127,8 @@ func (v *VDC) GetHardwareProfiles(c *AbiquoClient) ([]HWprofile, error) {
 
 		if hprofiles.HasNext() {
 			next_link := hprofiles.GetNext()
-			profiles_raw, err = c.client.R().SetHeader("Accept", "application/vnd.abiquo.hardwareprofiles+json").
-				Get(next_link.Href)
+			profiles_raw, err = c.checkResponse(c.client.R().SetHeader("Accept", "application/vnd.abiquo.hardwareprofiles+json").
+				Get(next_link.Href))
 			if err != nil {
 				return allProfiles, err
 			}
@@ -150,10 +150,10 @@ func (v *VDC) CreateVapp(vapp_name string, c *AbiquoClient) (VirtualApp, error) 
 	if err != nil {
 		return vapp, err
 	}
-	vapp_raw, err := c.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualappliance+json").
+	vapp_raw, err := c.checkResponse(c.checkResponse(c.client.R().SetHeader("Accept", "application/vnd.abiquo.virtualappliance+json").
 		SetHeader("Content-Type", "application/vnd.abiquo.virtualappliance+json").
 		SetBody(jsonbytes).
-		Post(vapps_lnk.Href)
+		Post(vapps_lnk.Href)))
 	if err != nil {
 		return vapp, err
 	}
