@@ -160,3 +160,79 @@ func (v *VDC) CreateVapp(vapp_name string, c *AbiquoClient) (VirtualApp, error) 
 	json.Unmarshal(vapp_raw.Body(), &vapp)
 	return vapp, nil
 }
+
+func (v *VDC) GetExternalNetworks(c *AbiquoClient) ([]Vlan, error) {
+	var netCol VlanCollection
+	var nets []Vlan
+
+	nets_resp, err := v.FollowLink("externalnetworks", c)
+	if err != nil {
+		return nets, err
+	}
+	json.Unmarshal(nets_resp.Body(), &netCol)
+
+	for {
+		for _, n := range netCol.Collection {
+			nets = append(nets, n)
+		}
+
+		if netCol.HasNext() {
+			next_link := netCol.GetNext()
+			nets_resp, err = c.checkResponse(c.client.R().SetHeader("Accept", "application/vnd.abiquo.vlans+json").
+				Get(next_link.Href))
+			if err != nil {
+				return nets, err
+			}
+			json.Unmarshal(nets_resp.Body(), &netCol)
+		} else {
+			break
+		}
+	}
+
+	return nets, nil
+}
+
+func (v *VDC) GetPrivateNetworks(c *AbiquoClient) ([]Vlan, error) {
+	var netCol VlanCollection
+	var nets []Vlan
+
+	nets_resp, err := v.FollowLink("privatenetworks", c)
+	if err != nil {
+		return nets, err
+	}
+	json.Unmarshal(nets_resp.Body(), &netCol)
+
+	for {
+		for _, n := range netCol.Collection {
+			nets = append(nets, n)
+		}
+
+		if netCol.HasNext() {
+			next_link := netCol.GetNext()
+			nets_resp, err = c.checkResponse(c.client.R().SetHeader("Accept", "application/vnd.abiquo.vlans+json").
+				Get(next_link.Href))
+			if err != nil {
+				return nets, err
+			}
+			json.Unmarshal(nets_resp.Body(), &netCol)
+		} else {
+			break
+		}
+	}
+
+	return nets, nil
+}
+
+func (v *VDC) GetNetworks(c *AbiquoClient) ([]Vlan, error) {
+	privnets, err := v.GetPrivateNetworks(c)
+	if err != nil {
+		return nil, err
+	}
+
+	extnets, err := v.GetExternalNetworks(c)
+	if err != nil {
+		return nil, err
+	}
+
+	return append(extnets, privnets...), nil
+}

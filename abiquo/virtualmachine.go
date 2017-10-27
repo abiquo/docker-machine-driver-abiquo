@@ -228,11 +228,10 @@ func (v *VirtualMachine) GetIP() string {
 
 func (v *VirtualMachine) SetMetadata(mdata string, c *AbiquoClient) error {
 	metadata_lnk, _ := v.GetLink("metadata")
-	body, _ := json.Marshal(mdata)
 
 	_, err := c.checkResponse(c.client.R().SetHeader("Accept", "application/vnd.abiquo.metadata+json").
 		SetHeader("Content-Type", "application/vnd.abiquo.metadata+json").
-		SetBody(body).
+		SetBody(mdata).
 		Put(metadata_lnk.Href))
 	if err != nil {
 		return err

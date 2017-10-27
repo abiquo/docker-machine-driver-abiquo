@@ -47,6 +47,7 @@ type Driver struct {
 	TemplateName      string
 	VirtualDatacenter string
 	VirtualAppliance  string
+	NetworkName       string
 	Cpus              int
 	Ram               int
 	HardwareProfile   string
@@ -112,6 +113,11 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Usage: "Abiquo Virtualappliance",
 			Value: "Docker Machine",
 		},
+		mcnflag.StringFlag{
+			Name:  "abiquo-network",
+			Usage: "Abiquo Network name",
+			Value: "",
+		},
 		mcnflag.IntFlag{
 			Name:  "abiquo-cpus",
 			Usage: "CPUs for the VM",
@@ -137,15 +143,6 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 		mcnflag.StringFlag{
 			Name:  "abiquo-user-data",
 			Usage: "User Data to inject to VM",
-		},
-		mcnflag.BoolFlag{
-			Name:  "abiquo-debug",
-			Usage: "Wether or not to output debug logging for the Abiquo API calls",
-		},
-		mcnflag.StringFlag{
-			Name:  "abiquo-debug-log-file",
-			Usage: "Log file where to output debug from HTTP client",
-			Value: "/tmp/docker-machine-driver-abiquo.log",
 		},
 	}
 }
@@ -199,6 +196,7 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 
 	d.VirtualDatacenter = flags.String("abiquo-vdc")
 	d.VirtualAppliance = flags.String("abiquo-vapp")
+	d.NetworkName = flags.String("abiquo-network")
 	d.TemplateName = flags.String("abiquo-template-name")
 	d.Cpus = flags.Int("abiquo-cpus")
 	d.Ram = flags.Int("abiquo-ram")
@@ -206,8 +204,6 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	d.SSHKeyPath = flags.String("abiquo-ssh-key")
 	d.SSHUser = flags.String("abiquo-ssh-user")
 	d.UserData = flags.String("abiquo-user-data")
-	d.Debug = flags.Bool("abiquo-debug")
-	d.DebugLogFile = flags.String("abiquo-debug-log-file")
 
 	d.SetSwarmConfigFromFlags(flags)
 
@@ -353,6 +349,12 @@ func (d *Driver) Create() error {
 		log.Debug(fmt.Sprintf("Set VM resoures, %d CPU, %d RAM", dockerVM.CPU, dockerVM.RAM))
 	}
 
+	// Set Network
+	dockerVM, err = d.setVMNetwork(dockerVM)
+	if err != nil {
+		return err
+	}
+
 	// Create the machine
 	log.Info("Creating virtual machine...")
 	dockerVM, err = d.createVM(vapp, dockerVM)
@@ -400,7 +402,9 @@ func (d *Driver) Remove() error {
 
 	err = vm.Delete(abq)
 	if err != nil {
-		return err
+		if !strings.Contains(err.Error(), "404") {
+			return err
+		}
 	}
 
 	vapp, err := vm.GetVapp(abq)
@@ -660,6 +664,37 @@ func (d *Driver) createVM(vapp abiquo_api.VirtualApp, vm abiquo_api.VirtualMachi
 		return vm_created, err
 	}
 	return vm_created, nil
+}
+
+func (d *Driver) setVMNetwork(vm abiquo_api.VirtualMachine) (abiquo_api.VirtualMachine, error) {
+	if d.NetworkName != "" {
+		var net abiquo_api.Vlan
+		abq := d.getClient()
+		vdc, err := d.getVdc()
+		if err != nil {
+			return vm, err
+		}
+
+		nets, err := vdc.GetNetworks(abq)
+		if err != nil {
+			return vm, err
+		}
+
+		for _, n := range nets {
+			if n.Name == d.NetworkName {
+				net = n
+			}
+		}
+		ip, err := net.GetFreeIp(abq)
+		if err != nil {
+			return vm, err
+		}
+
+		ip_link, _ := ip.GetLink("self")
+		ip_link.Rel = "nic0"
+		vm.Links = append(vm.Links, ip_link)
+	}
+	return vm, nil
 }
 
 func (d *Driver) setUserData(vm abiquo_api.VirtualMachine, ssh_key_bytes []byte) error {

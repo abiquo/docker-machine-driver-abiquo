@@ -7,14 +7,14 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	// "net/url"
+	"net/http/cookiejar"
 	"os"
-	// "strings"
 	"time"
 
 	"github.com/ernesto-jimenez/httplogger"
 	"github.com/go-resty/resty"
 	"github.com/nhjk/oauth"
+	"github.com/technoweenie/multipartstreamer"
 )
 
 type AbiquoClient struct {
@@ -29,7 +29,7 @@ func GetClient(apiurl string, user string, pass string, insecure bool) *AbiquoCl
 	}
 
 	logger := &httpLogger{
-		log: log.New(os.Stderr, "log - ", log.LstdFlags),
+		log: log.New(os.Stderr, "AbiquoAPI - ", log.LstdFlags),
 	}
 
 	var baseClient *http.Client
@@ -67,7 +67,7 @@ func GetOAuthClient(apiurl string, api_key string, api_secret string, token stri
 	}
 
 	logger := &httpLogger{
-		log: log.New(os.Stderr, "log - ", log.LstdFlags),
+		log: log.New(os.Stderr, "AbiquoAPI - ", log.LstdFlags),
 	}
 
 	var baseClient *http.Client
@@ -236,4 +236,41 @@ func (c *AbiquoClient) GetVMByUrl(vm_url string) (VirtualMachine, error) {
 	}
 	json.Unmarshal(vm_raw.Body(), &vm)
 	return vm, nil
+}
+
+func (c *AbiquoClient) Login() (User, error) {
+	var user User
+	login_resp, err := c.checkResponse(c.client.R().SetHeader("Accept", "application/vnd.abiquo.user+json").
+		Get(fmt.Sprintf("%s/login", c.client.HostURL)))
+	if err != nil {
+		return user, err
+	}
+	json.Unmarshal(login_resp.Body(), &user)
+	return user, nil
+}
+
+func (c *AbiquoClient) upload(uri string, params map[string]string, paramName, path string) (*http.Response, error) {
+	// Need the cookie to authenticate to AM
+	jar, _ := cookiejar.New(nil)
+	c.client.SetCookieJar(jar)
+
+	_, err := c.Login()
+	if err != nil {
+		return nil, err
+	}
+
+	httpCli := c.client.GetClient()
+	httpCli.Jar = jar
+
+	httpReq, err := http.NewRequest("POST", uri, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	ms := multipartstreamer.New()
+	ms.WriteFields(params)
+	ms.WriteFile(paramName, path)
+	ms.SetupRequest(httpReq)
+
+	return c.client.GetClient().Do(httpReq)
 }
