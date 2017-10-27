@@ -48,7 +48,9 @@ func (v *Vlan) GetFreeIp(c *AbiquoClient) (Ip, error) {
 		for _, i := range ipcol.Collection {
 			_, err := i.GetLink("virtualmachine")
 			if err != nil {
-				return i, nil
+				if i.Available {
+					return i, nil
+				}
 			}
 		}
 		if ipcol.HasNext() {

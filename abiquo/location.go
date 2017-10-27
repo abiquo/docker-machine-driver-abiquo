@@ -7,6 +7,6 @@ type LocationCollection struct {
 
 type Location struct {
 	DTO
-	ID   int    `json:"id,omitempty"`
-	Name string `json:"name,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Location string `json:"location,omitempty"`
 }

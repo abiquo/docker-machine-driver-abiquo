@@ -48,6 +48,7 @@ type Driver struct {
 	VirtualDatacenter string
 	VirtualAppliance  string
 	NetworkName       string
+	PublicIp          bool
 	Cpus              int
 	Ram               int
 	HardwareProfile   string
@@ -117,6 +118,10 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Name:  "abiquo-network",
 			Usage: "Abiquo Network name",
 			Value: "",
+		},
+		mcnflag.BoolFlag{
+			Name:  "abiquo-public-ip",
+			Usage: "Attach a public IP to the VM.",
 		},
 		mcnflag.IntFlag{
 			Name:  "abiquo-cpus",
@@ -197,6 +202,7 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	d.VirtualDatacenter = flags.String("abiquo-vdc")
 	d.VirtualAppliance = flags.String("abiquo-vapp")
 	d.NetworkName = flags.String("abiquo-network")
+	d.PublicIp = flags.Bool("abiquo-public-ip")
 	d.TemplateName = flags.String("abiquo-template-name")
 	d.Cpus = flags.Int("abiquo-cpus")
 	d.Ram = flags.Int("abiquo-ram")
@@ -243,11 +249,14 @@ func (d *Driver) GetURL() (string, error) {
 
 // GetIP returns the IP that this host is available at
 func (d *Driver) GetIP() (string, error) {
-	vm, err := d.getVmByUrl(d.Id)
-	if err != nil {
-		return "", err
+	if d.IPAddress == "" {
+		vm, err := d.getVmByUrl(d.Id)
+		if err != nil {
+			return "", err
+		}
+		d.IPAddress = vm.GetIP()
 	}
-	return vm.GetIP(), nil
+	return d.IPAddress, nil
 }
 
 // GetState returns the state that the host is in (running, stopped, etc)
@@ -400,6 +409,7 @@ func (d *Driver) Remove() error {
 		return err
 	}
 
+	log.Info(fmt.Sprintf("Deleting VM %s...", vm.Name))
 	err = vm.Delete(abq)
 	if err != nil {
 		if !strings.Contains(err.Error(), "404") {
@@ -667,33 +677,61 @@ func (d *Driver) createVM(vapp abiquo_api.VirtualApp, vm abiquo_api.VirtualMachi
 }
 
 func (d *Driver) setVMNetwork(vm abiquo_api.VirtualMachine) (abiquo_api.VirtualMachine, error) {
-	if d.NetworkName != "" {
-		var net abiquo_api.Vlan
-		abq := d.getClient()
-		vdc, err := d.getVdc()
-		if err != nil {
-			return vm, err
-		}
+	abq := d.getClient()
+	vdc, err := d.getVdc()
+	if err != nil {
+		return vm, err
+	}
 
-		nets, err := vdc.GetNetworks(abq)
-		if err != nil {
-			return vm, err
-		}
+	if d.PublicIp {
+		// Public IP requested
+		var ip abiquo_api.Ip
 
-		for _, n := range nets {
-			if n.Name == d.NetworkName {
-				net = n
+		if vdc.IsPCR() {
+			// Allocate floating IP
+			ip, err = vdc.AllocateFloatingIp(abq)
+			if err != nil {
+				return vm, err
 			}
-		}
-		ip, err := net.GetFreeIp(abq)
-		if err != nil {
-			return vm, err
+		} else {
+			// Allocate public IP
+			ip, err = vdc.AllocatePublicIp(abq, d.NetworkName)
+			if err != nil {
+				return vm, err
+			}
 		}
 
 		ip_link, _ := ip.GetLink("self")
 		ip_link.Rel = "nic0"
 		vm.Links = append(vm.Links, ip_link)
+	} else {
+		// No public IP
+		// Allocate to specified net if defined
+		// Otherwise, let Abiquo use default network
+		if d.NetworkName != "" {
+			var net abiquo_api.Vlan
+
+			nets, err := vdc.GetNetworks(abq)
+			if err != nil {
+				return vm, err
+			}
+
+			for _, n := range nets {
+				if n.Name == d.NetworkName {
+					net = n
+				}
+			}
+			ip, err := net.GetFreeIp(abq)
+			if err != nil {
+				return vm, err
+			}
+
+			ip_link, _ := ip.GetLink("self")
+			ip_link.Rel = "nic0"
+			vm.Links = append(vm.Links, ip_link)
+		}
 	}
+
 	return vm, nil
 }
 

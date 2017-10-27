@@ -236,3 +236,160 @@ func (v *VDC) GetNetworks(c *AbiquoClient) ([]Vlan, error) {
 
 	return append(extnets, privnets...), nil
 }
+
+func (v *VDC) IsPCR() bool {
+	location_lnk, _ := v.GetLink("location")
+
+	if location_lnk.Type == "application/vnd.abiquo.publiccloudregion+json" {
+		return true
+	} else {
+		return false
+	}
+}
+
+func (v *VDC) AllocateFloatingIp(c *AbiquoClient) (Ip, error) {
+	var floating Ip
+	var theIp Ip
+	var location Location
+
+	location_resp, err := v.FollowLink("location", c)
+	if err != nil {
+		return floating, err
+	}
+	json.Unmarshal(location_resp.Body(), &location)
+
+	ips_lnk, _ := location.GetLink("ips")
+
+	floating_resp, err := c.checkResponse(c.client.R().
+		SetHeader("Accept", "application/vnd.abiquo.publicip+json").
+		SetHeader("Content-Type", "application/vnd.abiquo.publicip+json").
+		Post(ips_lnk.Href))
+	if err != nil {
+		return floating, err
+	}
+	json.Unmarshal(floating_resp.Body(), &floating)
+
+	var topurchase IpCollection
+	topurchase_resp, err := v.FollowLink("topurchase", c)
+	if err != nil {
+		return theIp, err
+	}
+	json.Unmarshal(topurchase_resp.Body(), &topurchase)
+
+	for {
+		for _, i := range topurchase.Collection {
+			if i.IP == floating.IP {
+				return i.PurchasePublicIp(c)
+			}
+		}
+		if topurchase.HasNext() {
+			next_link := topurchase.GetNext()
+			topurchase_resp, err := c.checkResponse(c.client.R().
+				SetHeader("Accept", "application/vnd.abiquo.publicips+json").
+				SetHeader("Content-Type", "application/vnd.abiquo.publicips+json").
+				Get(next_link.Href))
+			if err != nil {
+				return theIp, err
+			}
+			json.Unmarshal(topurchase_resp.Body(), &topurchase)
+		} else {
+			break
+		}
+	}
+	errorMsg := fmt.Sprintf("Could not find floating IP to purchase!")
+	return theIp, errors.New(errorMsg)
+}
+
+func (v *VDC) GetPublicNetworks(c *AbiquoClient) ([]Vlan, error) {
+	var netCol VlanCollection
+	var nets []Vlan
+
+	myLink, _ := v.GetLink("edit")
+	pubnets_resp, err := c.checkResponse(c.client.R().
+		SetHeader("Accept", "application/vnd.abiquo.vlans+json").
+		Get(fmt.Sprintf("%s/publicvlans", myLink.Href)))
+	if err != nil {
+		return nets, err
+	}
+	json.Unmarshal(pubnets_resp.Body(), &netCol)
+
+	for {
+		for _, n := range netCol.Collection {
+			nets = append(nets, n)
+		}
+		if netCol.HasNext() {
+			next_link := netCol.GetNext()
+			pubnets_resp, err := c.checkResponse(c.client.R().SetHeader("Accept", "application/vnd.abiquo.vlans+json").
+				Get(next_link.Href))
+			if err != nil {
+				return nets, err
+			}
+			json.Unmarshal(pubnets_resp.Body(), &netCol)
+		} else {
+			break
+		}
+	}
+	return nets, nil
+}
+
+func (v *VDC) GetIpsToPurchase(c *AbiquoClient) ([]Ip, error) {
+	var ips []Ip
+	var ipCol IpCollection
+
+	ips_link, _ := v.GetLink("topurchase")
+	ips_resp, err := v.FollowLink("topurchase", c)
+	if err != nil {
+		return ips, err
+	}
+	json.Unmarshal(ips_resp.Body(), &ipCol)
+
+	for {
+		for _, i := range ipCol.Collection {
+			ips = append(ips, i)
+		}
+		if ipCol.HasNext() {
+			next_link := ipCol.GetNext()
+			ips_resp, err := c.checkResponse(c.client.R().SetHeader("Accept", ips_link.Type).
+				Get(next_link.Href))
+			if err != nil {
+				return ips, err
+			}
+			json.Unmarshal(ips_resp.Body(), &ipCol)
+		} else {
+			break
+		}
+	}
+
+	return ips, nil
+}
+
+func (v *VDC) AllocatePublicIp(c *AbiquoClient, netName string) (Ip, error) {
+	var theIp Ip
+
+	ips, err := v.GetIpsToPurchase(c)
+	if err != nil {
+		return theIp, nil
+	}
+
+	if netName != "" {
+		for _, i := range ips {
+			net_link, _ := i.GetLink("publicnetwork")
+			if netName == net_link.Title {
+				_, err := i.GetLink("virtualmachine")
+				if err != nil {
+					return i.PurchasePublicIp(c)
+				}
+			}
+		}
+	} else {
+		for _, i := range ips {
+			_, err := i.GetLink("virtualmachine")
+			if err != nil {
+				return i.PurchasePublicIp(c)
+			}
+		}
+	}
+
+	errorMsg := "Could not allocate a public IP in this VDC."
+	return theIp, errors.New(errorMsg)
+}
