@@ -28,24 +28,24 @@ Description:
 Options:
 
    --abiquo-access-token                    Abiquo API OAuth access token [$ABIQUO_API_ACCESS_TOKEN]
-   --abiquo-access-token-secret                   Abiquo API OAuth access token [$ABIQUO_API_ACCESS_TOKEN_SECRET]
+   --abiquo-access-token-secret             Abiquo API OAuth access token [$ABIQUO_API_ACCESS_TOKEN_SECRET]
    --abiquo-api-insecure                    Abiquo API SSL verification [$ABIQUO_API_INSECURE]
    --abiquo-api-password                    Abiquo API password [$ABIQUO_API_PASSWORD]
-   --abiquo-api-url                       Abiquo API URL [$ABIQUO_API_URL]
+   --abiquo-api-url                         Abiquo API URL [$ABIQUO_API_URL]
    --abiquo-api-username                    Abiquo API username [$ABIQUO_API_USERNAME]
-   --abiquo-app-key                       Abiquo API OAuth app key [$ABIQUO_API_APP_KEY]
+   --abiquo-app-key                         Abiquo API OAuth app key [$ABIQUO_API_APP_KEY]
    --abiquo-app-secret                      Abiquo API OAuth app secret [$ABIQUO_API_APP_SECRET]
-   --abiquo-cpus "1"                      CPUs for the VM
-   --abiquo-debug                     Wether or not to output debug logging for the Abiquo API calls
-   --abiquo-debug-log-file "/tmp/docker-machine-driver-abiquo.log"          Log file where to output debug from HTTP client
+   --abiquo-cpus "1"                        CPUs for the VM
    --abiquo-hwprofile                       Hardware profile for the VM
+   --abiquo-network                         Abiquo Network name
+   --abiquo-public-ip                       Attach a public IP to the VM.
    --abiquo-ram "1024"                      RAM in MB for the VM
-   --abiquo-ssh-key                       Path to the SSH key file to use for SSH access
-   --abiquo-ssh-user                      User name for SSH access
-   --abiquo-template-name                     Template name
+   --abiquo-ssh-key                         Path to the SSH key file to use for SSH access
+   --abiquo-ssh-user                        User name for SSH access
+   --abiquo-template-name                   Template name
    --abiquo-user-data                       User Data to inject to VM
-   --abiquo-vapp "Docker Machine"                 Abiquo Virtualappliance
-   --abiquo-vdc                       Abiquo VirtualDatacenter
+   --abiquo-vapp "Docker Machine"           Abiquo Virtualappliance
+   --abiquo-vdc                             Abiquo VirtualDatacenter
 ```
 
 # License and Authors
