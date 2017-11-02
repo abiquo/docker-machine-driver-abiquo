@@ -14,7 +14,7 @@ import (
 	"github.com/docker/machine/libmachine/ssh"
 	"github.com/docker/machine/libmachine/state"
 
-	"github.com/abiquo/docker-machine-driver-abiquo/abiquo"
+	"github.com/abiquo/api-go-client"
 )
 
 const (
