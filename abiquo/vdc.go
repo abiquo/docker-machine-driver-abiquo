@@ -114,29 +114,40 @@ func (v *VDC) GetHardwareProfiles(c *AbiquoClient) ([]HWprofile, error) {
 	}
 	json.Unmarshal(location_raw.Body(), &location)
 
-	profiles_raw, err := location.FollowLink("hardwareprofiles", c)
+	/// https://jira.abiquo.com/browse/ABICLOUDPREMIUM-9957
+	///
+	// profiles_raw, err := location.FollowLink("hardwareprofiles", c)
+	// if err != nil {
+	// 	return allProfiles, err
+	// }
+
+	profiles_lnk, _ := location.GetLink("hardwareprofiles")
+	profiles_raw, err := c.checkResponse(c.client.R().
+		SetHeader("Accept", profiles_lnk.Type).
+		SetQueryParam("limit", "0").
+		Get(profiles_lnk.Href))
 	if err != nil {
 		return allProfiles, err
 	}
-
 	json.Unmarshal(profiles_raw.Body(), &hprofiles)
-	for {
-		for _, hp := range hprofiles.Collection {
-			allProfiles = append(allProfiles, hp)
-		}
 
-		if hprofiles.HasNext() {
-			next_link := hprofiles.GetNext()
-			profiles_raw, err = c.checkResponse(c.client.R().SetHeader("Accept", "application/vnd.abiquo.hardwareprofiles+json").
-				Get(next_link.Href))
-			if err != nil {
-				return allProfiles, err
-			}
-			json.Unmarshal(profiles_raw.Body(), &hprofiles)
-		} else {
-			break
-		}
+	// for {
+	for _, hp := range hprofiles.Collection {
+		allProfiles = append(allProfiles, hp)
 	}
+
+	// if hprofiles.HasNext() {
+	// 	next_link := hprofiles.GetNext()
+	// 	profiles_raw, err = c.checkResponse(c.client.R().SetHeader("Accept", "application/vnd.abiquo.hardwareprofiles+json").
+	// 		Get(next_link.Href))
+	// 	if err != nil {
+	// 		return allProfiles, err
+	// 	}
+	// 	json.Unmarshal(profiles_raw.Body(), &hprofiles)
+	// } else {
+	// 	break
+	// }
+	// }
 
 	return allProfiles, nil
 }
@@ -392,4 +403,20 @@ func (v *VDC) AllocatePublicIp(c *AbiquoClient, netName string) (Ip, error) {
 
 	errorMsg := "Could not allocate a public IP in this VDC."
 	return theIp, errors.New(errorMsg)
+}
+
+func (v *VDC) GetDevice(c *AbiquoClient) (Device, error) {
+	var dev Device
+
+	_, err := v.GetLink("device")
+	if err != nil {
+		return dev, err
+	}
+
+	dev_resp, err := v.FollowLink("device", c)
+	if err != nil {
+		return dev, err
+	}
+	json.Unmarshal(dev_resp.Body(), &dev)
+	return dev, nil
 }

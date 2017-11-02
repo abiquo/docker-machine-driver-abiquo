@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	driverName = "abiquo"
-	dockerPort = 2376
-	swarmPort  = 3376
+	driverName   = "abiquo"
+	dockerPort   = 2376
+	swarmPort    = 3376
+	firewallName = "docker-machine-fw"
 )
 
 type configError struct {
@@ -158,7 +159,6 @@ func NewDriver(hostName, storePath string) drivers.Driver {
 			MachineName: hostName,
 			StorePath:   storePath,
 		},
-		// FirewallRuleIds: []string{},
 	}
 	return driver
 }
@@ -359,7 +359,13 @@ func (d *Driver) Create() error {
 	}
 
 	// Set Network
+	log.Info("Configuring VM network...")
 	dockerVM, err = d.setVMNetwork(dockerVM)
+	if err != nil {
+		return err
+	}
+
+	dockerVM, err = d.setFirewalls(dockerVM)
 	if err != nil {
 		return err
 	}
@@ -704,35 +710,137 @@ func (d *Driver) setVMNetwork(vm abiquo_api.VirtualMachine) (abiquo_api.VirtualM
 		ip_link, _ := ip.GetLink("self")
 		ip_link.Rel = "nic0"
 		vm.Links = append(vm.Links, ip_link)
-	} else {
-		// No public IP
-		// Allocate to specified net if defined
-		// Otherwise, let Abiquo use default network
-		if d.NetworkName != "" {
-			var net abiquo_api.Vlan
+	}
 
-			nets, err := vdc.GetNetworks(abq)
-			if err != nil {
-				return vm, err
-			}
+	// Allocate to specified net if defined
+	// Otherwise, let Abiquo use default network
+	if d.NetworkName != "" {
+		var net abiquo_api.Vlan
 
-			for _, n := range nets {
-				if n.Name == d.NetworkName {
-					net = n
-				}
-			}
-			ip, err := net.GetFreeIp(abq)
-			if err != nil {
-				return vm, err
-			}
-
-			ip_link, _ := ip.GetLink("self")
-			ip_link.Rel = "nic0"
-			vm.Links = append(vm.Links, ip_link)
+		nets, err := vdc.GetNetworks(abq)
+		if err != nil {
+			return vm, err
 		}
+
+		for _, n := range nets {
+			if n.Name == d.NetworkName {
+				net = n
+			}
+		}
+		ip, err := net.GetFreeIp(abq)
+		if err != nil {
+			return vm, err
+		}
+
+		ip_link, _ := ip.GetLink("self")
+		nic_index := 0
+		if d.PublicIp {
+			nic_index = 1
+		}
+
+		ip_link.Rel = fmt.Sprintf("nic%d", nic_index)
+		vm.Links = append(vm.Links, ip_link)
 	}
 
 	return vm, nil
+}
+
+func (d *Driver) setFirewalls(vm abiquo_api.VirtualMachine) (abiquo_api.VirtualMachine, error) {
+	var device abiquo_api.Device
+
+	abq := d.getClient()
+	vdc, err := d.getVdc()
+	if err != nil {
+		return vm, err
+	}
+
+	_, err = vdc.GetLink("device")
+	if err != nil {
+		// VDC does not have device, so no FW operations possible
+		log.Debugf("VDC does not have link to device... No FW possible")
+		return vm, nil
+	}
+
+	device_resp, err := vdc.FollowLink("device", abq)
+	if err != nil {
+		return vm, err
+	}
+	json.Unmarshal(device_resp.Body(), &device)
+	log.Debugf("Got device '%s' for VDC '%s'", device.Name, vdc.Name)
+
+	fwSupported, err := device.SupportsFirewall(abq)
+	if err != nil {
+		return vm, err
+	}
+	log.Debugf("Is firewall supported > %b", fwSupported)
+	if fwSupported {
+		fw, err := d.setupFirewall(abq, vdc)
+		if err != nil {
+			return vm, err
+		}
+
+		fw_lnk, _ := fw.GetLink("edit")
+		fw_lnk.Rel = "firewall"
+		vm.Links = append(vm.Links, fw_lnk)
+	}
+	return vm, nil
+}
+
+func (d *Driver) setupFirewall(c *abiquo_api.AbiquoClient, vdc abiquo_api.VDC) (abiquo_api.Firewall, error) {
+	var fw abiquo_api.Firewall
+
+	device, err := vdc.GetDevice(c)
+	if err != nil {
+		return fw, err
+	}
+
+	fws, err := device.GetFirewalls(c)
+	if err != nil {
+		return fw, err
+	}
+
+	log.Debugf("Looking for FW with name '%s'", firewallName)
+	for _, f := range fws {
+		log.Debugf("Got FW with name '%s'", f.Name)
+		if f.Name == firewallName {
+			log.Debugf("Going to return '%s'", f.Name)
+			return f, nil
+		}
+	}
+
+	log.Debugf("Creating firewall '%s'", firewallName)
+	fwrules := []abiquo_api.FirewallRule{
+		abiquo_api.FirewallRule{
+			Protocol: "TCP",
+			FromPort: dockerPort,
+			ToPort:   dockerPort,
+			Sources:  []string{"0.0.0.0/0"},
+		},
+		abiquo_api.FirewallRule{
+			Protocol: "TCP",
+			FromPort: swarmPort,
+			ToPort:   swarmPort,
+			Sources:  []string{"0.0.0.0/0"},
+		},
+		abiquo_api.FirewallRule{
+			Protocol: "TCP",
+			FromPort: 22,
+			ToPort:   22,
+			Sources:  []string{"0.0.0.0/0"},
+		},
+		abiquo_api.FirewallRule{
+			Protocol: "ALL",
+			FromPort: 0,
+			ToPort:   65535,
+			Targets:  []string{"0.0.0.0/0"},
+		},
+	}
+
+	fw, err = device.CreateFirewall(vdc, firewallName, "Docker Machine FW", c)
+	if err != nil {
+		return fw, err
+	}
+	return fw, fw.SetRules(fwrules, c)
 }
 
 func (d *Driver) setUserData(vm abiquo_api.VirtualMachine, ssh_key_bytes []byte) error {
