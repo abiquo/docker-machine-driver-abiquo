@@ -501,12 +501,13 @@ func (d *Driver) checkCpuRam() error {
 		return err
 	}
 
-	var lim abiquo_api.Limit
-	lim_raw, _ := vdc.FollowLink("limit", abq)
-	json.Unmarshal(lim_raw.Body(), &lim)
+	var loc abiquo_api.Location
+	loc_raw, _ := vdc.FollowLink("location", abq)
+	json.Unmarshal(loc_raw.Body(), &loc)
 
-	if lim.EnabledHardwareProfiles {
-		// Ned a HW profile
+	_, err = loc.GetLink("hardwareprofiles")
+	if err == nil {
+		// Need a HW profile
 		hwprofiles, err := vdc.GetHardwareProfiles(abq)
 		if err != nil {
 			return err
@@ -639,13 +640,8 @@ func (d *Driver) getVmByUrl(vmurl string) (abiquo_api.VirtualMachine, error) {
 
 func (d *Driver) getHWProfile(vdc abiquo_api.VDC) (abiquo_api.HWprofile, error) {
 	var hwprofile abiquo_api.HWprofile
-	var lim abiquo_api.Limit
 	abq := d.getClient()
-	lim_raw, err := vdc.FollowLink("limit", abq)
-	if err != nil {
-		return hwprofile, err
-	}
-	json.Unmarshal(lim_raw.Body(), &lim)
+
 	hprofiles, err := vdc.GetHardwareProfiles(abq)
 	if err != nil {
 		return hwprofile, err
