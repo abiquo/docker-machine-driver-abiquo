@@ -261,21 +261,25 @@ func (d *Driver) GetIP() (string, error) {
 
 // GetState returns the state that the host is in (running, stopped, etc)
 func (d *Driver) GetState() (state.State, error) {
-	vm, err := d.getVmByUrl(d.Id)
-	if err != nil {
-		return state.Error, err
-	}
+	if d.Id == "" {
+		return state.None, nil
+	} else {
+		vm, err := d.getVmByUrl(d.Id)
+		if err != nil {
+			return state.Error, err
+		}
 
-	switch vm.State {
-	case "ON":
-		return state.Running, nil
-	case "OFF":
-		return state.Stopped, nil
-	case "NOT_ALLOCATED":
+		switch vm.State {
+		case "ON":
+			return state.Running, nil
+		case "OFF":
+			return state.Stopped, nil
+		case "NOT_ALLOCATED":
+			return state.None, nil
+		}
+
 		return state.None, nil
 	}
-
-	return state.None, nil
 }
 
 // PreCreate allows for pre-create operations to make sure a driver is ready for creation
@@ -400,6 +404,10 @@ func (d *Driver) Create() error {
 	log.Info(fmt.Sprintf("Deploying VM %s", dockerVM.Name))
 	err = dockerVM.Deploy(abq)
 	if err != nil {
+		errorStr, _ := d.getVmErrors(dockerVM)
+		log.Info(fmt.Sprintf("Error deploying VM %s (%s)", dockerVM.Label, dockerVM.Name))
+		log.Info(errorStr)
+		d.deleteVM(dockerVM)
 		return err
 	}
 	log.Info(fmt.Sprintf("Deployed VM %s successfully", dockerVM.Name))
@@ -410,31 +418,34 @@ func (d *Driver) Create() error {
 // Remove a host
 func (d *Driver) Remove() error {
 	abq := d.getClient()
-	vm, err := d.getVmByUrl(d.Id)
-	if err != nil {
-		return err
-	}
 
-	log.Info(fmt.Sprintf("Deleting VM %s...", vm.Name))
-	err = vm.Delete(abq)
-	if err != nil {
-		if !strings.Contains(err.Error(), "404") {
+	if d.Id != "" {
+		vm, err := d.getVmByUrl(d.Id)
+		if err != nil {
 			return err
 		}
-	}
 
-	vapp, err := vm.GetVapp(abq)
-	if err != nil {
-		return err
-	}
+		log.Info(fmt.Sprintf("Deleting VM %s...", vm.Name))
+		err = vm.Delete(abq)
+		if err != nil {
+			if !strings.Contains(err.Error(), "404") {
+				return err
+			}
+		}
 
-	vms, err := vapp.GetVMs(abq)
-	if err != nil {
-		return err
-	}
-	if len(vms) == 0 {
-		log.Info("Deleting vApp since it's empty.")
-		vapp.Delete(abq)
+		vapp, err := vm.GetVapp(abq)
+		if err != nil {
+			return err
+		}
+
+		vms, err := vapp.GetVMs(abq)
+		if err != nil {
+			return err
+		}
+		if len(vms) == 0 {
+			log.Info("Deleting vApp since it's empty.")
+			vapp.Delete(abq)
+		}
 	}
 
 	return nil
@@ -655,6 +666,11 @@ func (d *Driver) getHWProfile(vdc abiquo_api.VDC) (abiquo_api.HWprofile, error) 
 	return hwprofile, nil
 }
 
+func (d *Driver) deleteVM(vm abiquo_api.VirtualMachine) error {
+	abq := d.getClient()
+	return vm.Delete(abq)
+}
+
 func (d *Driver) createVM(vapp abiquo_api.VirtualApp, vm abiquo_api.VirtualMachine) (abiquo_api.VirtualMachine, error) {
 	var vm_created abiquo_api.VirtualMachine
 	abq := d.getClient()
@@ -861,6 +877,28 @@ func (d *Driver) setUserData(vm abiquo_api.VirtualMachine, ssh_key_bytes []byte)
 		return err
 	}
 	return nil
+}
+
+func (d *Driver) getVmErrors(vm abiquo_api.VirtualMachine) (string, error) {
+	abq := d.getClient()
+
+	params := map[string]string{
+		"virtualMachine": vm.Name,
+		"severity":       "ERROR",
+		"limit":          "5",
+	}
+
+	events, err := abq.GetEvents(params)
+	if err != nil {
+		return "", err
+	}
+
+	var errorLines []string
+	for _, ev := range events {
+		errorLines = append(errorLines, ev.Stacktrace)
+	}
+
+	return strings.Join(errorLines, " | "), nil
 }
 
 func (d *Driver) getClient() *abiquo_api.AbiquoClient {
