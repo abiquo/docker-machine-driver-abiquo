@@ -54,8 +54,14 @@ type Driver struct {
 	Ram               int
 	HardwareProfile   string
 	UserData          string
-	Debug             bool
-	DebugLogFile      string
+
+	DiskController     string
+	DiskControllerType string
+	DiskTier           string
+	DiskSize           int
+
+	Debug        bool
+	DebugLogFile string
 }
 
 // GetCreateFlags registers the flags this driver adds to
@@ -150,6 +156,23 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Name:  "abiquo-user-data",
 			Usage: "User Data to inject to VM",
 		},
+		mcnflag.StringFlag{
+			Name:  "abiquo-disk-controller",
+			Usage: "Disk controller subtype to use in VM",
+		},
+		mcnflag.StringFlag{
+			Name:  "abiquo-disk-controller-type",
+			Usage: "Disk controller to use in VM [IDE, SCSI, VIRTIO]",
+		},
+		mcnflag.StringFlag{
+			Name:  "abiquo-disk-tier",
+			Usage: "Disk tier to use for VM's disks",
+		},
+		mcnflag.IntFlag{
+			Name:  "abiquo-disk-size",
+			Usage: "Additional harddisk size",
+			Value: 0,
+		},
 	}
 }
 
@@ -210,6 +233,11 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	d.SSHKeyPath = flags.String("abiquo-ssh-key")
 	d.SSHUser = flags.String("abiquo-ssh-user")
 	d.UserData = flags.String("abiquo-user-data")
+
+	d.DiskController = flags.String("abiquo-disk-controller")
+	d.DiskControllerType = flags.String("abiquo-disk-controller-type")
+	d.DiskTier = flags.String("abiquo-disk-tier")
+	d.DiskSize = flags.Int("abiquo-disk-size")
 
 	d.SetSwarmConfigFromFlags(flags)
 
@@ -369,6 +397,7 @@ func (d *Driver) Create() error {
 		return err
 	}
 
+	// Set firewalls
 	dockerVM, err = d.setFirewalls(dockerVM)
 	if err != nil {
 		return err
@@ -378,6 +407,25 @@ func (d *Driver) Create() error {
 	log.Info("Creating virtual machine...")
 	dockerVM, err = d.createVM(vapp, dockerVM)
 	if err != nil {
+		return err
+	}
+
+	// Add disks if needed
+	if d.DiskSize > 0 {
+		log.Info("Adding extra disk...")
+		err = d.addDiskToVM(d.DiskSize, &dockerVM)
+
+		if err != nil {
+			// d.rollBackVM(dockerVM)
+			return err
+		}
+	}
+
+	// Set disk controllers
+	log.Info("Configuring disks...")
+	err = d.setDiskControllers(&dockerVM)
+	if err != nil {
+		d.rollBackVM(dockerVM)
 		return err
 	}
 
@@ -404,10 +452,7 @@ func (d *Driver) Create() error {
 	log.Info(fmt.Sprintf("Deploying VM %s", dockerVM.Name))
 	err = dockerVM.Deploy(abq)
 	if err != nil {
-		errorStr, _ := d.getVmErrors(dockerVM)
-		log.Info(fmt.Sprintf("Error deploying VM %s (%s)", dockerVM.Label, dockerVM.Name))
-		log.Info(errorStr)
-		d.deleteVM(dockerVM)
+		d.rollBackVM(dockerVM)
 		return err
 	}
 	log.Info(fmt.Sprintf("Deployed VM %s successfully", dockerVM.Name))
@@ -684,6 +729,7 @@ func (d *Driver) createVM(vapp abiquo_api.VirtualApp, vm abiquo_api.VirtualMachi
 		log.Debug("Enabling remote access.")
 		vm.VdrpEnabled = true
 	}
+	vm.IconUrl = "https://abiquo-icons.s3.amazonaws.com/docker.png"
 	body, _ := json.Marshal(vm)
 
 	log.Debugf("VM JSON : %s", body)
@@ -899,6 +945,84 @@ func (d *Driver) getVmErrors(vm abiquo_api.VirtualMachine) (string, error) {
 	}
 
 	return strings.Join(errorLines, " | "), nil
+}
+
+func (d *Driver) setDiskControllers(vm *abiquo_api.VirtualMachine) error {
+	var newlinks []abiquo_api.Link
+	abq := d.getClient()
+
+	for _, l := range vm.Links {
+		log.Debug(fmt.Sprintf("VM Link: %s", l.Rel))
+		if strings.HasPrefix(l.Rel, "disk") && strings.Contains(l.Type, "harddisk") {
+			li := l
+			if d.DiskController != "" {
+				li.DiskController = d.DiskController
+			}
+			if d.DiskControllerType != "" {
+				li.DiskControllerType = d.DiskControllerType
+			}
+			newlinks = append(newlinks, li)
+			log.Debug(fmt.Sprintf("Disk: %v", li))
+		} else {
+			newlinks = append(newlinks, l)
+		}
+	}
+	vm.Links = newlinks
+
+	err := vm.Update(abq)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (d *Driver) addDiskToVM(size int, vm *abiquo_api.VirtualMachine) error {
+	abq := d.getClient()
+	var newlinks []abiquo_api.Link
+
+	disk := abiquo_api.Disk{
+		Label:    "DockerMachineData",
+		SizeInMb: size,
+	}
+
+	vdc, err := d.getVdc()
+	if err != nil {
+		return err
+	}
+
+	err = vdc.CreateDisk(&disk, abq)
+	if err != nil {
+		return err
+	}
+	log.Debug(fmt.Sprintf("Created disk: %v", disk))
+
+	disk_link, _ := disk.GetLink("edit")
+	disk_count := 0
+	for _, l := range vm.Links {
+		log.Debug(fmt.Sprintf("VM Link: %s", l.Rel))
+		if strings.HasPrefix(l.Rel, "disk") {
+			disk_count += 1
+		}
+		newlinks = append(newlinks, l)
+	}
+	disk_link.Rel = fmt.Sprintf("disk%d", disk_count)
+	newlinks = append(newlinks, disk_link)
+
+	vm.Links = newlinks
+
+	err = vm.Update(abq)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (d *Driver) rollBackVM(vm abiquo_api.VirtualMachine) {
+	errorStr, _ := d.getVmErrors(vm)
+	log.Info(fmt.Sprintf("Error deploying VM %s (%s)", vm.Label, vm.Name))
+	log.Info(errorStr)
+	d.deleteVM(vm)
 }
 
 func (d *Driver) getClient() *abiquo_api.AbiquoClient {
