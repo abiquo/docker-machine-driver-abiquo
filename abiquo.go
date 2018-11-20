@@ -170,7 +170,7 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 		},
 		mcnflag.IntFlag{
 			Name:  "abiquo-disk-size",
-			Usage: "Additional harddisk size",
+			Usage: "Additional harddisk size in MB",
 			Value: 0,
 		},
 	}

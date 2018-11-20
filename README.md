@@ -4,7 +4,7 @@ This is a driver for [Docker Machine](https://docs.docker.com/machine/), enablin
 
 ## Requirements
 
-* [Docker Machine](https://docs.docker.com/machine/). Tested with 0.12.2.
+* [Docker Machine](https://docs.docker.com/machine/). Tested with 0.16.0.
 
 ## Installation
 
@@ -27,25 +27,29 @@ Description:
 
 Options:
 
-   --abiquo-access-token                    Abiquo API OAuth access token [$ABIQUO_API_ACCESS_TOKEN]
-   --abiquo-access-token-secret             Abiquo API OAuth access token [$ABIQUO_API_ACCESS_TOKEN_SECRET]
-   --abiquo-api-insecure                    Abiquo API SSL verification [$ABIQUO_API_INSECURE]
-   --abiquo-api-password                    Abiquo API password [$ABIQUO_API_PASSWORD]
-   --abiquo-api-url                         Abiquo API URL [$ABIQUO_API_URL]
-   --abiquo-api-username                    Abiquo API username [$ABIQUO_API_USERNAME]
-   --abiquo-app-key                         Abiquo API OAuth app key [$ABIQUO_API_APP_KEY]
-   --abiquo-app-secret                      Abiquo API OAuth app secret [$ABIQUO_API_APP_SECRET]
-   --abiquo-cpus "1"                        CPUs for the VM
-   --abiquo-hwprofile                       Hardware profile for the VM
-   --abiquo-network                         Abiquo Network name
-   --abiquo-public-ip                       Attach a public IP to the VM.
-   --abiquo-ram "1024"                      RAM in MB for the VM
-   --abiquo-ssh-key                         Path to the SSH key file to use for SSH access
-   --abiquo-ssh-user                        User name for SSH access
-   --abiquo-template-name                   Template name
-   --abiquo-user-data                       User Data to inject to VM
-   --abiquo-vapp "Docker Machine"           Abiquo Virtualappliance
-   --abiquo-vdc                             Abiquo VirtualDatacenter
+   --abiquo-access-token                              Abiquo API OAuth access token [$ABIQUO_API_ACCESS_TOKEN]
+   --abiquo-access-token-secret                       Abiquo API OAuth access token [$ABIQUO_API_ACCESS_TOKEN_SECRET]
+   --abiquo-api-insecure                              Abiquo API SSL verification [$ABIQUO_API_INSECURE]
+   --abiquo-api-password                              Abiquo API password [$ABIQUO_API_PASSWORD]
+   --abiquo-api-url                                   Abiquo API URL [$ABIQUO_API_URL]
+   --abiquo-api-username                              Abiquo API username [$ABIQUO_API_USERNAME]
+   --abiquo-app-key                                   Abiquo API OAuth app key [$ABIQUO_API_APP_KEY]
+   --abiquo-app-secret                                Abiquo API OAuth app secret [$ABIQUO_API_APP_SECRET]
+   --abiquo-cpus "1"                                  CPUs for the VM
+   --abiquo-disk-controller                           Disk controller subtype to use in VM
+   --abiquo-disk-controller-type                      Disk controller to use in VM [IDE, SCSI, VIRTIO]
+   --abiquo-disk-size "0"                             Additional harddisk size in MB
+   --abiquo-disk-tier                                 Disk tier to use for VM's disks
+   --abiquo-hwprofile                                 Hardware profile for the VM
+   --abiquo-network                                   Abiquo Network name
+   --abiquo-public-ip                                 Attach a public IP to the VM.
+   --abiquo-ram "1024"                                RAM in MB for the VM
+   --abiquo-ssh-key                                   Path to the SSH key file to use for SSH access
+   --abiquo-ssh-user                                  User name for SSH access
+   --abiquo-template-name                             Template name
+   --abiquo-user-data                                 User Data to inject to VM
+   --abiquo-vapp "Docker Machine"                     Abiquo Virtualappliance
+   --abiquo-vdc                                       Abiquo VirtualDatacenter
 ```
 
 # License and Authors
