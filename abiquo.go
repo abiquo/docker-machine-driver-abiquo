@@ -424,7 +424,7 @@ func (d *Driver) Create() error {
 		err = d.addDiskToVM(d.DiskSize, &dockerVM)
 
 		if err != nil {
-			// d.rollBackVM(dockerVM)
+			d.rollBackVM(dockerVM)
 			return err
 		}
 	}
@@ -922,6 +922,17 @@ func (d *Driver) setupFirewall(c *abiquo_api.AbiquoClient, vdc abiquo_api.VDC) (
 func (d *Driver) setUserData(vm abiquo_api.VirtualMachine, ssh_key_bytes []byte) error {
 	abq := d.getClient()
 	mdata := fmt.Sprintf("#cloud-config\nusers:\n  - default:\n    ssh-authorized-keys:\n      - %s", ssh_key_bytes)
+
+	// Setup disks if extra disk is requested
+	if d.DiskSize > 0 {
+		disk_dev := "sdb"
+		if d.DiskControllerType == "VIRTIO" {
+			disk_dev = "vdb"
+		}
+		disk_snippet := fmt.Sprintf("\ndisk_setup:\n  /dev/%s:\n    table_type: gpt\n    layout: True\n    overwrite: True\nfs_setup:\n  - label: docker\n    filesystem: ext4\n    device: /dev/%s1\nmounts:\n - [ /dev/%s1, /var/lib/docker ]", disk_dev, disk_dev, disk_dev)
+		mdata = mdata + disk_snippet
+	}
+
 	log.Debug(fmt.Sprintf("Generated cloud-init script is: %s", mdata))
 
 	if d.UserData != "" {
