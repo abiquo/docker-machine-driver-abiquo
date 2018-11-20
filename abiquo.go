@@ -337,6 +337,14 @@ func (d *Driver) PreCreateCheck() error {
 		return err
 	}
 
+	if d.DiskTier != "" {
+		tier, err := d.getTier()
+		if err != nil {
+			return err
+		}
+		log.Debug("Tier: %v", tier)
+	}
+
 	return nil
 }
 
@@ -427,6 +435,16 @@ func (d *Driver) Create() error {
 	if err != nil {
 		d.rollBackVM(dockerVM)
 		return err
+	}
+
+	// Set disk tiers
+	if d.DiskTier != "" {
+		log.Info("Configuring disk tiers...")
+		err = d.setDiskTier(&dockerVM)
+		if err != nil {
+			d.rollBackVM(dockerVM)
+			return err
+		}
 	}
 
 	vm_url, _ := dockerVM.GetLink("edit")
@@ -947,6 +965,42 @@ func (d *Driver) getVmErrors(vm abiquo_api.VirtualMachine) (string, error) {
 	return strings.Join(errorLines, " | "), nil
 }
 
+func (d *Driver) setDiskTier(vm *abiquo_api.VirtualMachine) error {
+	var newlinks []abiquo_api.Link
+	abq := d.getClient()
+
+	tier, err := d.getTier()
+	if err != nil {
+		return err
+	}
+	tierLink, _ := tier.GetLink("self")
+
+	for _, l := range vm.Links {
+		log.Debug(fmt.Sprintf("VM Link: %s", l.Rel))
+		if strings.HasPrefix(l.Rel, "disk") && strings.Contains(l.Type, "harddisk") {
+			log.Debug(fmt.Sprintf("Disk: %v", l))
+
+			dstier_link := tierLink
+			dstier_link.Rel = strings.Replace(l.Rel, "disk", "datastoretier", -1)
+			log.Debug(fmt.Sprintf("Tier: %v", dstier_link))
+
+			newlinks = append(newlinks, dstier_link)
+			newlinks = append(newlinks, l)
+		} else if strings.HasPrefix(l.Rel, "datastoretier") {
+			log.Debug(fmt.Sprintf("Not copying tier link %v", l))
+		} else {
+			newlinks = append(newlinks, l)
+		}
+	}
+	vm.Links = newlinks
+
+	err = vm.Update(abq)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (d *Driver) setDiskControllers(vm *abiquo_api.VirtualMachine) error {
 	var newlinks []abiquo_api.Link
 	abq := d.getClient()
@@ -1016,6 +1070,43 @@ func (d *Driver) addDiskToVM(size int, vm *abiquo_api.VirtualMachine) error {
 	}
 
 	return nil
+}
+
+func (d *Driver) getTier() (abiquo_api.DatastoreTier, error) {
+	var tier abiquo_api.DatastoreTier
+
+	log.Debug(fmt.Sprintf("Looking for tier '%s'", d.DiskTier))
+
+	vdc, err := d.getVdc()
+	if err != nil {
+		return tier, err
+	}
+
+	tiers, err := d.getVDCTiers(vdc)
+	if err != nil {
+		return tier, err
+	}
+
+	for _, ti := range tiers {
+		log.Debug(fmt.Sprintf("Found tier '%s'", ti.Name))
+		if ti.Name == d.DiskTier {
+			return ti, nil
+		}
+	}
+
+	return tier, fmt.Errorf("Tier '%s' can't be found in VDC '%s'", d.DiskTier, vdc.Name)
+}
+
+func (d *Driver) getVDCTiers(vdc abiquo_api.VDC) ([]abiquo_api.DatastoreTier, error) {
+	var tiers []abiquo_api.DatastoreTier
+	abq := d.getClient()
+
+	tiers, err := vdc.GetDatastoreTiers(abq)
+	if err != nil {
+		return tiers, err
+	}
+
+	return tiers, nil
 }
 
 func (d *Driver) rollBackVM(vm abiquo_api.VirtualMachine) {
