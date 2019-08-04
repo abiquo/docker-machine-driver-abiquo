@@ -55,6 +55,7 @@ Options:
 # License and Authors
 
 * Author:: Marc Cirauqui (marc.cirauqui@abiquo.com)
+* Collaborator:: Sergi Castro (sergi.castro@abiquo.com)
 
 Copyright:: 2014, Abiquo
 
