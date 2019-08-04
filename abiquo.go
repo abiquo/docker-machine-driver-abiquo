@@ -770,10 +770,20 @@ func (d *Driver) setVMNetwork(vm abiquo_api.VirtualMachine) (abiquo_api.VirtualM
 		var ip abiquo_api.Ip
 
 		if vdc.IsPCR() {
-			// Allocate floating IP
-			ip, err = vdc.AllocateFloatingIp(abq)
+			// Search available IP
+			var ips []abiquo_api.Ip
+			ips, err = vdc.GetIpsPurchased(abq, true)
 			if err != nil {
 				return vm, err
+			}
+			if len(ips) > 0 {
+				ip = ips[0]
+			} else {
+				// Allocate floating IP
+				ip, err = vdc.AllocateFloatingIp(abq)
+				if err != nil {
+					return vm, err
+				}
 			}
 		} else {
 			// Allocate public IP
